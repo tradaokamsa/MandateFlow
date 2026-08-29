@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="980" viewBox="0 0 1800 980" role="img" aria-labelledby="title desc">
+  <title id="title">Retry changes the executor, not the security context</title>
+  <desc id="desc">A recognized retry replaces the Run, disposable Runtime, immutable Run grant and short-lived capability. The policy context, root mandate, pinned policy version and reference lineage remain server-side and unchanged. The old capability becomes terminal, the retry grant is no broader than the original, and a previously forbidden Payment-derived CRM transition remains denied.</desc>
+  <defs>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#2563eb"/></marker>
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#7c3aed"/></marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#dc2626"/></marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.10"/></filter>
+    <style>
+      text { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #172033; }
+      .title { font-size: 34px; font-weight: 700; }
+      .subtitle { font-size: 17px; fill: #64748b; }
+      .zone-label { font-size: 14px; font-weight: 700; letter-spacing: 1.3px; }
+      .node-title { font-size: 16px; font-weight: 700; text-anchor: middle; }
+      .node-sub { font-size: 12.5px; fill: #64748b; text-anchor: middle; }
+      .edge-label { font-size: 12px; font-weight: 700; fill: #475569; text-anchor: middle; }
+      .stable { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 2; filter: url(#shadow); }
+      .run { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; filter: url(#shadow); }
+      .grant { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; filter: url(#shadow); }
+      .terminal { fill: #fff1f2; stroke: #dc2626; stroke-width: 2; filter: url(#shadow); }
+      .active { fill: #ecfdf5; stroke: #059669; stroke-width: 2; filter: url(#shadow); }
+      .retry-edge { fill: none; stroke: #7c3aed; stroke-width: 2.6; stroke-dasharray: 9 7; marker-end: url(#arrowPurple); }
+      .flow-edge { fill: none; stroke: #2563eb; stroke-width: 2.3; marker-end: url(#arrowBlue); }
+      .deny-edge { fill: none; stroke: #dc2626; stroke-width: 2.5; marker-end: url(#arrowRed); }
+    </style>
+  </defs>
+
+  <rect width="1800" height="980" fill="#ffffff"/>
+  <text x="50" y="56" class="title">Retry changes the executor, not the security context</text>
+  <text x="50" y="86" class="subtitle">Fresh runtime authority is replaceable; the workflow's mandate, policy version and provenance journal stay server-owned</text>
+
+  <!-- Stable workflow context -->
+  <rect x="50" y="118" width="1700" height="190" rx="18" fill="#faf8ff" stroke="#c4b5fd" stroke-width="1.8"/>
+  <text x="74" y="149" class="zone-label" fill="#6d28d9">PERSISTENT WORKFLOW SECURITY CONTEXT — UNCHANGED ACROSS A RECOGNIZED RETRY</text>
+  <rect x="82" y="174" width="350" height="92" rx="12" class="stable"/><text x="257" y="207" class="node-title">policyContextId = ctx-8</text><text x="257" y="232" class="node-sub">server-generated · bound to Codex thread</text><text x="257" y="253" class="node-sub">cannot be rebound to another workflow</text>
+  <rect x="472" y="174" width="350" height="92" rx="12" class="stable"/><text x="647" y="207" class="node-title">Root mandate v1</text><text x="647" y="232" class="node-sub">purpose: MIXED_OPERATIONS_BRIEF</text><text x="647" y="253" class="node-sub">maximum authority + expiry</text>
+  <rect x="862" y="174" width="350" height="92" rx="12" class="stable"/><text x="1037" y="207" class="node-title">Pinned flow policy v1</text><text x="1037" y="232" class="node-sub">NO_PAYMENT_REIDENTIFICATION</text><text x="1037" y="253" class="node-sub">meaning cannot change mid-workflow</text>
+  <rect x="1252" y="174" width="466" height="92" rx="12" class="stable"/><text x="1485" y="207" class="node-title">Ordered protected-reference journal</text><text x="1485" y="232" class="node-sub">payment_ref → case_ref · PAYMENT_AGGREGATE_ONLY</text><text x="1485" y="253" class="node-sub">parent hashes + producing receipts remain available</text>
+
+  <!-- Original Run -->
+  <rect x="50" y="350" width="670" height="350" rx="18" fill="#fffaf5" stroke="#fdba74" stroke-width="1.8"/>
+  <text x="74" y="382" class="zone-label" fill="#c2410c">ORIGINAL RUN</text>
+  <rect x="82" y="410" width="286" height="104" rx="12" class="run"/><text x="225" y="442" class="node-title">Run 1 · Runtime A</text><text x="225" y="467" class="node-sub">runId = run-1</text><text x="225" y="488" class="node-sub">runtimeId = container-A</text><text x="225" y="508" class="node-sub">Codex thread bound to ctx-8</text>
+  <rect x="402" y="410" width="286" height="104" rx="12" class="grant"/><text x="545" y="442" class="node-title">Immutable RunGrant G1</text><text x="545" y="467" class="node-sub">G1 ⊆ root mandate</text><text x="545" y="488" class="node-sub">CRM statically permitted</text><text x="545" y="508" class="node-sub">purpose + policy version pinned</text>
+  <rect x="82" y="552" width="286" height="104" rx="12" class="terminal"/><text x="225" y="584" class="node-title">Capability C1</text><text x="225" y="609" class="node-sub">short-lived bearer · stored as hash</text><text x="225" y="630" class="node-sub">terminal after Run completion</text><text x="225" y="650" class="node-sub">later use → generic HTTP 401</text>
+  <rect x="402" y="552" width="286" height="104" rx="12" class="terminal"/><text x="545" y="584" class="node-title">Original denial evidence</text><text x="545" y="609" class="node-sub">Payment → Case → CRM = FLOW_DENIED</text><text x="545" y="630" class="node-sub">CRM counter remains 1</text><text x="545" y="650" class="node-sub">lineage persists outside Runtime A</text>
+
+  <!-- Retry transition -->
+  <path d="M720 525H1080" class="retry-edge"/>
+  <polygon points="900,430 1020,525 900,620 780,525" fill="#faf8ff" stroke="#7c3aed" stroke-width="2.2" filter="url(#shadow)"/>
+  <text x="900" y="493" class="node-title">Explicit retry</text><text x="900" y="519" class="node-sub">load same context + original grant</text><text x="900" y="540" class="node-sub">derive no-broader successor</text><text x="900" y="561" class="node-sub">issue fresh Run identity</text>
+
+  <!-- Retry Run -->
+  <rect x="1080" y="350" width="670" height="350" rx="18" fill="#f6fffb" stroke="#6ee7b7" stroke-width="1.8"/>
+  <text x="1104" y="382" class="zone-label" fill="#047857">RETRY SUCCESSOR RUN</text>
+  <rect x="1112" y="410" width="286" height="104" rx="12" class="run"/><text x="1255" y="442" class="node-title">Run 2 · Runtime B</text><text x="1255" y="467" class="node-sub">new runId = run-2</text><text x="1255" y="488" class="node-sub">new runtimeId = container-B</text><text x="1255" y="508" class="node-sub">same Codex thread only under ctx-8</text>
+  <rect x="1432" y="410" width="286" height="104" rx="12" class="grant"/><text x="1575" y="442" class="node-title">Immutable RunGrant G2</text><text x="1575" y="467" class="node-sub">G2 ⊆ root mandate</text><text x="1575" y="488" class="node-sub">G2 ⊆ original RunGrant G1</text><text x="1575" y="508" class="node-sub">same purpose + policy version</text>
+  <rect x="1112" y="552" width="286" height="104" rx="12" class="active"/><text x="1255" y="584" class="node-title">Fresh capability C2</text><text x="1255" y="609" class="node-sub">new random bearer + fingerprint</text><text x="1255" y="630" class="node-sub">bound only to RunGrant G2</text><text x="1255" y="650" class="node-sub">active only for Run 2 lifetime</text>
+  <rect x="1432" y="552" width="286" height="104" rx="12" class="terminal"/><text x="1575" y="584" class="node-title">Same policy result</text><text x="1575" y="609" class="node-sub">same Payment-derived Case reference</text><text x="1575" y="630" class="node-sub">CRM remains FLOW_DENIED</text><text x="1575" y="650" class="node-sub">counter still 1 · safe aggregate allowed</text>
+
+  <!-- Shared-context bindings -->
+  <path d="M257 266V326H225V410" class="retry-edge"/><path d="M257 326H1255V410" class="retry-edge"/>
+  <path d="M647 266V326H545V410" class="retry-edge"/><path d="M647 326H1575V410" class="retry-edge"/>
+
+  <!-- Proof chain -->
+  <rect x="235" y="742" width="1330" height="104" rx="16" fill="#fff1f2" stroke="#fca5a5" stroke-width="1.8"/>
+  <text x="900" y="773" class="node-title">Retry proof: replacement does not launder provenance</text>
+  <text x="390" y="811" class="edge-label">case_ref_2 resolves under ctx-8</text><path d="M545 816H735" class="flow-edge"/>
+  <text x="835" y="811" class="edge-label">static CRM scope = ALLOW</text><path d="M955 816H1135" class="flow-edge"/>
+  <text x="1255" y="811" class="edge-label">stored Payment ancestry → FLOW_DENIED</text><path d="M1415 816H1470" class="deny-edge"/>
+  <text x="1522" y="821" class="edge-label" fill="#dc2626">counter = 1</text>
+
+  <rect x="360" y="882" width="1080" height="48" rx="9" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="900" y="903" class="edge-label">A new secure workflow is different: create a new context and mandate, clear the Codex thread, and reject old-context references.</text>
+  <text x="900" y="923" class="edge-label">Retry continuity is an authorization guarantee, not exactly-once execution or general replay prevention.</text>
+</svg>
