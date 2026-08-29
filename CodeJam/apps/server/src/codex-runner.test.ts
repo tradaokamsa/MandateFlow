@@ -1,14 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexArgs, parseCodexEventLine } from "./codex-runner.js";
+import {
+  buildCodexArgs,
+  parseCodexEventLine,
+  redactRuntimeOutput,
+} from "./codex-runner.js";
 
 describe("Codex runner protocol", () => {
   it("builds a new-session invocation", () => {
     const args = buildCodexArgs(
       {
+        runId: "run-1",
         agentId: "agent",
         workspacePath: "/tmp/workspace",
         prompt: "build a calculator",
         threadId: null,
+        mandateFlowCapability: "",
       },
       "workspace-write",
     );
@@ -27,10 +33,12 @@ describe("Codex runner protocol", () => {
   it("resumes a stored Codex thread", () => {
     const args = buildCodexArgs(
       {
+        runId: "run-2",
         agentId: "agent",
         workspacePath: "/tmp/workspace",
         prompt: "add tests",
         threadId: "thread-123",
+        mandateFlowCapability: "",
       },
       "workspace-write",
     );
@@ -69,5 +77,17 @@ describe("Codex runner protocol", () => {
     expect(parsed.threadId).toBe("thread-123");
     expect(parsed.messages).toEqual(["Done."]);
     expect(parsed.usage).toEqual({ inputTokens: 10, outputTokens: 4 });
+  });
+
+  it("redacts Run authority and opaque protected references from captured output", () => {
+    const capability = "mfr1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const reference = "ref1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const redacted = redactRuntimeOutput(
+      `capability=${capability} reference=${reference}`,
+      capability,
+    );
+    expect(redacted).toBe(
+      "capability=[REDACTED_RUN_CAPABILITY] reference=[REDACTED_PROTECTED_REFERENCE]",
+    );
   });
 });

@@ -9,6 +9,7 @@ export interface Agent {
   status: AgentStatus;
   workspacePath: string;
   codexThreadId: string | null;
+  activePolicyContextId: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
@@ -35,7 +36,64 @@ export interface AgentRun {
     cachedInputTokens?: number;
     outputTokens?: number;
   } | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  policyContextId: string | null;
+  runGrantId: string | null;
+  retryOfRunId: string | null;
+  mandateStatus:
+    | "pending"
+    | "active"
+    | "finalizing"
+    | "closed"
+    | "security-finalization-pending";
+  capabilityFingerprint: string | null;
+  grantFingerprint: string | null;
+  runtimeInstanceId: string | null;
   createdAt: string;
+}
+
+export interface PolicyReceipt {
+  id: string;
+  createdAt: string;
+  runId: string;
+  policyContextId: string;
+  runGrantId: string;
+  tool: string;
+  action: string;
+  resourceKind: string;
+  decision: "ALLOW" | "DENY";
+  staticScopeDecision: "ALLOW" | "DENY";
+  provenanceDecision: "ALLOW" | "DENY" | "NOT_EVALUATED";
+  enforcementStage: "PRE_EXECUTION";
+  outcome: "SUCCEEDED" | "FAILED" | "NOT_INVOKED";
+  downstreamInvoked: boolean;
+  ruleId: string | null;
+  reason: string;
+  causedByReceiptIds: string[];
+  inputReferenceAliases: string[];
+  redactedInputSummary: string;
+  redactedResultSummary: string;
+  counterBefore: number;
+  counterAfter: number;
+  policyId: string;
+  policyVersion: number;
+}
+
+export interface MandateEvidence {
+  runId: string;
+  policyContextId: string;
+  runGrantId: string;
+  retryOfRunId: string | null;
+  runtimeInstanceId: string;
+  runStatus: string;
+  purposeId: string;
+  policyId: string;
+  policyVersion: number;
+  grantFingerprint: string;
+  capabilityFingerprint: string;
+  crmCounter: number;
+  receipts: PolicyReceipt[];
 }
 
 export interface SystemInfo {
@@ -47,4 +105,7 @@ export interface SystemInfo {
   runtimeProvider: "local-process" | "container";
   containerEngine: string | null;
   runtime: string;
+  mandateFlowEnabled: boolean;
+  mandateFlowReady: boolean;
+  mandateFlowPolicy: string | null;
 }

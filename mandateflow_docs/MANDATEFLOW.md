@@ -4,7 +4,7 @@
 
 > Least privilege that survives tool chaining and disposable-Runtime retries.
 
-- **Status:** Proposed TechJam Track 1 design
+- **Status:** Go P0 implemented; live pinned-Runtime acceptance remains an explicit pre-demo check
 - **Primary runtime:** Local disposable Codex container
 - **Primary boundary:** Protected MCP tool calls
 - **MVP scope:** One mixed-purpose workflow, typed protected references and one deterministic flow policy
@@ -145,19 +145,20 @@ control flows.
 
 ![MandateFlow integration architecture](mandateflow-assets/mandateflow-architecture.svg)
 
-*MandateFlow integrates at three starter-kit seams, reuses one shared JSON Store
-v2 for trusted policy state, and leaves Ark inference unchanged. Protected
-fixtures expose neither a direct Runtime route nor downstream credentials.*
+*MandateFlow integrates at three starter-kit seams while the Go sidecar
+exclusively owns SQLite policy state. Node keeps only baseline metadata and safe
+foreign IDs. Ark inference remains unchanged, and protected fixtures expose
+neither a direct Runtime route nor downstream credentials.*
 
 ### Responsibilities by extension seam
 
 | Starter-kit seam | MandateFlow responsibility | Concrete integration |
 | --- | --- | --- |
 | Fastify API | Human control and evidence | Add receipt and explicit-retry routes. Revoke and new-session routes are P1. |
-| `AgentService` | Authority lifecycle | Create or reuse the policy context, persist the immutable Run grant, mint a capability and persist retry lineage. |
+| `AgentService` | Authority orchestration | Generate each raw Run capability, call Go prepare/activate/finish, and persist only safe IDs/fingerprints and retry display state. |
 | `AgentRunner` | Runtime bootstrap | Pass the Run ID, Gateway URL and capability to Codex without placing the capability value in argv or shared configuration. |
 | Codex Runtime | Protected tool data plane | Call the MCP Gateway directly, in parallel with the existing Ark inference connection. |
-| JSON store | Trusted state | Persist mandates, Run grants, capability hashes, protected-reference lineage, retry relationships and redacted receipts. |
+| Go-owned SQLite | Trusted state | Persist mandates, immutable Run grants, capability digests, protected-reference lineage, retry relationships, counters and redacted receipts in five domain tables. |
 | Protected fixtures | Enforcement target | Expose Support, Payment, Case and CRM operations only through the Gateway; the Runtime receives no fixture credential or direct route. |
 
 ## Trust model
@@ -165,9 +166,8 @@ fixtures expose neither a direct Runtime route nor downstream credentials.*
 ### Trusted
 
 - Fastify and `AgentService`.
-- Mandate Controller and policy evaluator.
-- MCP Gateway.
-- JSON policy state.
+- Go mandate controller, policy evaluator and MCP Gateway.
+- Go-owned SQLite policy state.
 - Protected Support, Payment, Case and CRM fixture implementations.
 
 ### Untrusted
@@ -496,8 +496,9 @@ solely because the inputs have different provenance.
 ![MandateFlow protected MCP request decision flow](mandateflow-assets/mandateflow-request-flow.svg)
 
 *Authentication failures return a generic HTTP `401` without a normal policy
-receipt. Authenticated calls reach a fixture only after scope, typed-reference
-and provenance checks pass and an `ALLOW/PENDING` admission is persisted.*
+receipt. Authenticated calls reach an embedded fixture only after scope,
+typed-reference and provenance checks pass. Fixture work, its receipt, counter
+update and any derived reference commit atomically before a result is returned.*
 
 ## Failure behavior
 
@@ -530,9 +531,6 @@ interface PolicyReceipt {
   policyContextId: string;
   runId: string;
   runGrantId: string;
-  initiatingActorId: string;
-  agentPrincipalId: string;
-  mandateId: string;
   tool: string;
   action: string;
   resourceKind: string;
@@ -540,16 +538,18 @@ interface PolicyReceipt {
   staticScopeDecision: "ALLOW" | "DENY";
   provenanceDecision: "ALLOW" | "DENY" | "NOT_EVALUATED";
   enforcementStage: "PRE_EXECUTION";
-  outcome: "NOT_INVOKED" | "PENDING" | "SUCCEEDED" | "FAILED";
+  outcome: "NOT_INVOKED" | "SUCCEEDED" | "FAILED";
   policyId: string;
   policyVersion: number;
-  downstreamInvoked: boolean | null;
+  downstreamInvoked: boolean;
   ruleId: string | null;
   reason: string;
   causedByReceiptIds: string[];
   inputReferenceAliases: string[];
   redactedInputSummary: string;
   redactedResultSummary: string | null;
+  counterBefore: number;
+  counterAfter: number;
 }
 ```
 
@@ -568,19 +568,18 @@ Receipts must never include:
 - Complete MCP request/response bodies.
 - Chain of thought.
 
-The P0 runs one Node process with one shared `JsonStore` instance used by both the
-browser API and MCP listener. Its mutation queue is process-local. Admission
-validation and the initial receipt write share one serialized mutation; the
-store lock is released before invoking a fixture; the outcome and any derived
-reference lineage are persisted before the result is returned. An `ALLOW`
-receipt therefore means admitted, while `outcome` distinguishes success from a
-downstream failure. A provisional allow is `PENDING` with
-`downstreamInvoked: null`, so a crash window is never misreported as
-`NOT_INVOKED`; a pre-execution denial is unambiguously `NOT_INVOKED` and `false`.
+The P0 runs one trusted Node lifecycle adapter and one Go sidecar. Node's
+`JsonStore` retains only baseline Agent/message data and safe Go foreign IDs. Go
+exclusively owns one SQLite connection and five domain tables: contexts, runs,
+protected references, receipts and fixture counters. Authentication, admission,
+embedded fixture execution, counter updates, receipt creation and derived
+reference creation occur through the Go reference monitor. An allowed fixture
+result and all related state commit in one transaction before disclosure. A
+pre-execution denial commits `NOT_INVOKED`, `downstreamInvoked: false`, and equal
+before/after counter values.
 
-The current JSON store atomically rewrites one file, but that is not a
-multi-process transaction, durable audit database or tamper-proof ledger. Unless
-a hash chain is implemented and tested, describe receipts as a persistent
+SQLite provides atomic committed transactions on the tested local filesystem;
+it is not a tamper-proof ledger. Receipts are therefore described as a durable
 decision journal rather than append-only evidence.
 
 ## Hero demonstration
@@ -757,16 +756,16 @@ no browser administration routes.
 Use a Streamable HTTP MCP server with a bearer-token environment variable:
 
 ```toml
-[mcp_servers.launchpad_gateway]
-url = "http://launchpad-host:3001/mcp"
-bearer_token_env_var = "LAUNCHPAD_RUN_CAPABILITY"
+[mcp_servers.mandateflow]
+url = "http://mandateflow-gateway:3001/mcp"
+bearer_token_env_var = "MANDATEFLOW_RUN_CAPABILITY"
 required = true
 ```
 
 The generated configuration contains only the variable name. The Runner passes
 the value into a private spawn environment for the active Run; it must not mutate
 global `process.env`. For Docker or Podman, process argv contains only
-`--env LAUNCHPAD_RUN_CAPABILITY`, while the value exists in that spawn's parent
+`--env MANDATEFLOW_RUN_CAPABILITY`, while the value exists in that spawn's parent
 environment and is redacted from captured output.
 
 The first engineering gate is an end-to-end spike through the starter's actual
@@ -777,7 +776,7 @@ Codex container
     → MCP initialize
     → tools/list
     → authenticated tools/call
-    → host Gateway
+    → mandateflow-gateway network alias
     → protected test fixture
 ```
 
@@ -791,7 +790,8 @@ For the chosen local container profile:
 - Keep the browser API on loopback.
 - Expose a separate capability-protected MCP listener reachable from the
   container.
-- Configure and document one tested Docker, Colima or Podman host alias.
+- Join the instance-specific private bridge network and use the sidecar's
+  `mandateflow-gateway` alias.
 - Give the Runtime no route or credential for the protected fixtures except the
   Gateway.
 - Treat Gateway unavailability as fatal for required protected tools.
@@ -801,19 +801,15 @@ For the chosen local container profile:
 | File or module | Required change |
 | --- | --- |
 | `apps/server/src/types.ts` | Extend `AgentRun` and `RunnerRequest` with policy-context, Run-grant and retry linkage; export only safe receipt views. |
-| `apps/server/src/store.ts` | Add a v1-to-v2 migration for mandates, immutable Run grants, capability hashes, references and receipts; keep mutations serialized and create derived references plus lineage atomically. |
-| `apps/server/src/app.ts` | Add receipt/retry routes and a separately authenticated MCP listener without browser administration routes. |
-| `apps/server/src/agent-service.ts` | Own policy-context creation, immutable grant persistence, capability issuance, terminal invalidation and explicit retry. |
+| `apps/server/src/store.ts` | Add a v1-to-v2 migration for safe policy-context, grant, retry and evidence foreign IDs only. |
+| `apps/server/src/app.ts` | Add authenticated evidence, explicit-retry and new-workflow routes; MCP remains in Go. |
+| `apps/server/src/agent-service.ts` | Orchestrate Go prepare/activate/finish, per-Run capability delivery, fail-closed finalization and explicit retry. |
 | `apps/server/src/config.ts` | Generate the MCP configuration with only the Gateway URL and bearer environment-variable name. |
 | `apps/server/src/codex-runner.ts` | Add request-specific capability environment injection without logging the value. |
 | `apps/server/src/container-codex-runner.ts` | Key active processes, container names and cancellation by `runId`; inject the named environment variable, configure the tested host route and expose a Runtime/container identifier for demo evidence. |
-| `apps/server/src/mandateflow/types.ts` | Define `Mandate`, `RunGrant`, capability, reference, policy and receipt records. |
-| `apps/server/src/mandateflow/mandate-service.ts` | Derive and validate immutable, no-broader Run grants. |
-| `apps/server/src/mandateflow/reference-store.ts` | Mint opaque references, resolve context-bound mappings and persist transitive ancestry. |
-| `apps/server/src/mandateflow/flow-policy.ts` | Load, validate and evaluate the deterministic versioned rule fixture. |
-| `apps/server/src/mandateflow/mcp-gateway.ts` | Authenticate MCP calls, check static and provenance policy, invoke fixtures only on allow and persist redacted receipts. |
-| `apps/server/src/mandateflow/protected-fixtures.ts` | Implement private Support, Payment, Case and CRM fixtures plus trusted invocation counters. |
-| `apps/server/src/mandateflow/policies/mixed-operations.v1.json` | Store the externally visible, startup-validated MVP rule. |
+| `apps/server/src/mandateflow-client.ts` | Strict authenticated client for Go lifecycle and evidence control operations; contains no policy logic. |
+| `middleware/mandateflow/` | Go Streamable HTTP MCP gateway, immutable grants, provenance/reference monitor, embedded fixtures, receipts and five-table SQLite store. |
+| `middleware/mandateflow/config/mixed-operations.v1.json` | Startup-validated and context-pinned MVP rule. |
 | `apps/web/src/types.ts`, `api.ts`, `App.tsx` | Add safe receipt/retry types and calls, the seeded purpose summary, decision timeline and fixture counter. |
 | `README.md`, `docs/DEMO.md` | Document fresh-start setup, the exact seeded prompt, selected container engine, expected counter transitions, limitations and rehearsal procedure. Copy this proposal and its assets into the `CodeJam` repository before submission. |
 
@@ -962,7 +958,7 @@ support unit tests, but it is not acceptable as the submitted end-to-end proof.
 
 | Day | Engineering goal | Exit evidence |
 | --- | --- | --- |
-| Day 1, first 2 hours | Complete the pinned-container integration spike. | Real authenticated `initialize`, `tools/list` and `tools/call` reach the host Gateway through the documented route. |
+| Day 1, first 2 hours | Complete the pinned-container integration spike. | Real authenticated `initialize`, `tools/list` and `tools/call` reach the Go Gateway through the private network alias. |
 | Day 1, remainder | Implement fixtures, store migration, immutable Run grants, hashed capabilities, opaque references, transitive lineage and versioned flow policy. | Backend tests prove Support allow, Payment denial through Case ancestry, pre-invocation enforcement and safe aggregate recovery. |
 | Day 2 | Integrate `AgentService` and both Runners, terminal capability invalidation, retry continuity, receipts and the minimal UI. | One browser-triggered Codex Run completes the mixed task, and a fresh Runtime retry retains the denial. |
 | Day 3 | Add direct-HTTP/bypass/outage/redaction tests, deterministic seed, documentation and repeated rehearsals. Add revocation only if P0 is stable. | `npm run check` passes; a clean setup reproduces the complete live scenario five times under three minutes. |

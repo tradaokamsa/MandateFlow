@@ -1,7 +1,11 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { AppConfig } from "./config.js";
-import { buildCodexArgs, parseCodexEventLine } from "./codex-runner.js";
+import {
+  buildCodexArgs,
+  parseCodexEventLine,
+  redactRuntimeOutput,
+} from "./codex-runner.js";
 import { RunCancelledError } from "./errors.js";
 import type {
   AgentRunner,
@@ -29,17 +33,17 @@ interface ParsedEvents {
   errors: string[];
 }
 
-export function containerName(agentId: string, instanceId = "default"): string {
+export function containerName(runId: string, instanceId = "default"): string {
   const safeInstance = instanceId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 32);
-  const safeAgent = agentId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 48);
-  return "launchpad-" + safeInstance + "-" + safeAgent;
+  const safeRun = runId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 48);
+  return "launchpad-" + safeInstance + "-run-" + safeRun;
 }
 
 export function buildContainerRunArgs(
   request: RunnerRequest,
   config: AppConfig,
 ): string[] {
-  const name = containerName(request.agentId, config.runtimeInstanceId);
+  const name = containerName(request.runId, config.runtimeInstanceId);
   const engineName = config.containerEngine.split(/[\\/]/).at(-1)?.toLowerCase();
   return [
     "run",
@@ -52,10 +56,12 @@ export function buildContainerRunArgs(
     "--label",
     "io.codejam.agent-id=" + request.agentId,
     "--label",
+    "io.codejam.run-id=" + request.runId,
+    "--label",
     "io.codejam.instance-id=" + config.runtimeInstanceId,
     ...(engineName === "podman" ? ["--userns", "keep-id"] : []),
     "--network",
-    "bridge",
+    config.mandateFlowEnabled ? config.mandateFlowContainerNetwork : "bridge",
     "--security-opt",
     "no-new-privileges",
     "--cap-drop",
@@ -70,6 +76,7 @@ export function buildContainerRunArgs(
     config.containerUser,
     "--env",
     "ARK_API_KEY",
+    ...(config.mandateFlowEnabled ? ["--env", "MANDATEFLOW_RUN_CAPABILITY"] : []),
     "--env",
     "CODEX_HOME=/codex-home",
     "--env",
@@ -110,8 +117,8 @@ export class ContainerCodexRunner implements AgentRunner {
     }
   }
 
-  async cancel(agentId: string): Promise<boolean> {
-    const active = this.active.get(agentId);
+  async cancel(runId: string): Promise<boolean> {
+    const active = this.active.get(runId);
     if (!active) return false;
 
     active.cancelled = true;
@@ -138,8 +145,8 @@ export class ContainerCodexRunner implements AgentRunner {
   }
 
   async run(request: RunnerRequest): Promise<RunnerResult> {
-    if (this.active.has(request.agentId)) {
-      throw new Error("Agent already has an active Runtime container");
+    if (this.active.has(request.runId)) {
+      throw new Error("Run already has an active Runtime container");
     }
 
     const child = spawn(
@@ -147,7 +154,7 @@ export class ContainerCodexRunner implements AgentRunner {
       buildContainerRunArgs(request, this.config),
       {
         cwd: request.workspacePath,
-        env: this.childEnvironment(),
+        env: this.childEnvironment(request.mandateFlowCapability),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -157,14 +164,14 @@ export class ContainerCodexRunner implements AgentRunner {
     });
     const active: ActiveContainer = {
       child,
-      containerName: containerName(request.agentId, this.config.runtimeInstanceId),
+      containerName: containerName(request.runId, this.config.runtimeInstanceId),
       cancelled: false,
       timedOut: false,
       outputExceeded: false,
       settled,
       termination: null,
     };
-    this.active.set(request.agentId, active);
+    this.active.set(request.runId, active);
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -187,7 +194,12 @@ export class ContainerCodexRunner implements AgentRunner {
         stdout += chunk.toString("utf8");
         const lines = stdout.split(/\r?\n/);
         stdout = lines.pop() ?? "";
-        for (const line of lines) parseCodexEventLine(line, parsed);
+        for (const line of lines) {
+          parseCodexEventLine(
+            redactRuntimeOutput(line, request.mandateFlowCapability),
+            parsed,
+          );
+        }
       } else {
         stderr += chunk.toString("utf8");
         if (stderr.length > 16_384) stderr = stderr.slice(-16_384);
@@ -208,7 +220,12 @@ export class ContainerCodexRunner implements AgentRunner {
         child.once("error", reject);
         child.once("close", (code) => resolve(code ?? 1));
       });
-      if (stdout.trim()) parseCodexEventLine(stdout.trim(), parsed);
+      if (stdout.trim()) {
+        parseCodexEventLine(
+          redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
+          parsed,
+        );
+      }
       if (active.cancelled) throw new RunCancelledError();
       if (active.timedOut) {
         throw new Error("Runtime timed out after " + this.config.codexTimeoutMs + " ms");
@@ -217,7 +234,10 @@ export class ContainerCodexRunner implements AgentRunner {
         throw new Error("Codex output exceeded CODEX_MAX_OUTPUT_BYTES");
       }
       if (exitCode !== 0) {
-        const detail = parsed.errors.at(-1) ?? stderr.trim() ?? "No error detail";
+        const detail =
+          parsed.errors.at(-1) ??
+          redactRuntimeOutput(stderr.trim(), request.mandateFlowCapability) ??
+          "No error detail";
         throw new Error(
           this.config.containerEngine +
             " Runtime exited with code " +
@@ -228,18 +248,26 @@ export class ContainerCodexRunner implements AgentRunner {
       }
       const output = parsed.messages.at(-1)?.trim();
       if (!output) throw new Error("Codex completed without an agent message");
-      return { output, threadId: parsed.threadId, usage: parsed.usage };
+      return {
+        output,
+        threadId: parsed.threadId,
+        usage: parsed.usage,
+        runtimeInstanceId: active.containerName,
+      };
     } finally {
       clearTimeout(timeout);
-      this.active.delete(request.agentId);
+      this.active.delete(request.runId);
     }
   }
 
-  private childEnvironment(): NodeJS.ProcessEnv {
+  private childEnvironment(mandateFlowCapability = ""): NodeJS.ProcessEnv {
     const environment: NodeJS.ProcessEnv = {
       ARK_API_KEY: this.config.arkApiKey,
       NO_COLOR: "1",
     };
+    if (mandateFlowCapability) {
+      environment.MANDATEFLOW_RUN_CAPABILITY = mandateFlowCapability;
+    }
     for (const name of [
       "PATH",
       "HOME",

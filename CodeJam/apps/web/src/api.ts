@@ -1,4 +1,10 @@
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type {
+  Agent,
+  AgentRun,
+  MandateEvidence,
+  Message,
+  SystemInfo,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -78,4 +84,14 @@ export const api = {
       },
     ),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
+  evidence: (id: string) =>
+    request<{ evidence: MandateEvidence }>("/api/runs/" + id + "/evidence"),
+  retryRun: (id: string) =>
+    request<{ run: AgentRun }>("/api/runs/" + id + "/retry", {
+      method: "POST",
+    }),
+  newDemoWorkflow: (id: string) =>
+    request<{ agent: Agent }>("/api/agents/" + id + "/new-demo-workflow", {
+      method: "POST",
+    }),
 };
