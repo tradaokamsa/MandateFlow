@@ -32,6 +32,27 @@ const envSchema = z.object({
     .max(48)
     .regex(/^[a-zA-Z0-9_.-]+$/)
     .default("default"),
+  MANDATEFLOW_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  MANDATEFLOW_CONTROL_URL: z
+    .string()
+    .url()
+    .default("http://127.0.0.1:3002"),
+  MANDATEFLOW_CONTROL_TOKEN: z.string().trim().optional(),
+  MANDATEFLOW_RUNTIME_MCP_URL: z
+    .string()
+    .url()
+    .default("http://mandateflow-gateway:3001/mcp"),
+  MANDATEFLOW_CONTAINER_NETWORK: z
+    .string()
+    .trim()
+    .min(1)
+    .max(96)
+    .regex(/^[a-zA-Z0-9_.-]+$/)
+    .default("mandateflow-local"),
+  MANDATEFLOW_CONTROL_HOST_PORT: z.coerce.number().int().min(1).max(65535).default(3002),
   APP_AUTH_TOKEN: z
     .string()
     .trim()
@@ -60,6 +81,27 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
       );
     }
   }
+  const mandateFlowControlToken = env.MANDATEFLOW_CONTROL_TOKEN?.trim() ?? "";
+  if (env.MANDATEFLOW_ENABLED) {
+    if (
+      !/^mfc1_[A-Za-z0-9_-]{43}$/.test(mandateFlowControlToken)
+    ) {
+      throw new Error(
+        "MANDATEFLOW_CONTROL_TOKEN must be a strong mfc1_ token when MandateFlow is enabled",
+      );
+    }
+    if (authToken.length < 24 || authToken.startsWith("replace-")) {
+      throw new Error(
+        "APP_AUTH_TOKEN must contain at least 24 characters when MandateFlow is enabled",
+      );
+    }
+    const controlHostname = new URL(env.MANDATEFLOW_CONTROL_URL).hostname;
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(controlHostname)) {
+      throw new Error(
+        "MANDATEFLOW_CONTROL_URL must use a loopback host for the local P0",
+      );
+    }
+  }
   const defaultContainerUser =
     typeof process.getuid === "function" && typeof process.getgid === "function"
       ? process.getuid() + ":" + process.getgid()
@@ -83,6 +125,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     containerPidsLimit: env.CONTAINER_PIDS_LIMIT,
     containerUser: env.CONTAINER_USER?.trim() || defaultContainerUser,
     runtimeInstanceId: env.RUNTIME_INSTANCE_ID,
+    mandateFlowEnabled: env.MANDATEFLOW_ENABLED,
+    mandateFlowControlUrl: env.MANDATEFLOW_CONTROL_URL.replace(/\/+$/, ""),
+    mandateFlowControlToken,
+    mandateFlowRuntimeMcpUrl: env.MANDATEFLOW_RUNTIME_MCP_URL,
+    mandateFlowContainerNetwork: env.MANDATEFLOW_CONTAINER_NETWORK,
+    mandateFlowControlHostPort: env.MANDATEFLOW_CONTROL_HOST_PORT,
     authToken,
     arkApiKey: env.ARK_API_KEY?.trim() ?? "",
     arkModel: env.ARK_MODEL?.trim() ?? "",
@@ -114,6 +162,15 @@ export async function writeCodexConfig(config: AppConfig): Promise<void> {
     'wire_api = "responses"',
     "requires_openai_auth = false",
     "",
+    ...(config.mandateFlowEnabled
+      ? [
+          "[mcp_servers.mandateflow]",
+          "url = " + JSON.stringify(config.mandateFlowRuntimeMcpUrl),
+          'bearer_token_env_var = "MANDATEFLOW_RUN_CAPABILITY"',
+          "required = true",
+          "",
+        ]
+      : []),
   ].join("\n");
   await writeFile(path.join(config.codexHome, "config.toml"), toml, {
     encoding: "utf8",

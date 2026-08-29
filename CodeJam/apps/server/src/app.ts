@@ -66,6 +66,7 @@ export async function createApp(
   app.get("/api/health", async () => ({
     ok: true,
     service: "volc-agent-launchpad",
+    ...(await service.healthInfo()),
   }));
 
   app.get("/api/auth", async () => ({ required: config.authToken.length > 0 }));
@@ -123,9 +124,24 @@ export async function createApp(
     return reply.code(202).send(result);
   });
 
+  app.post("/api/agents/:id/new-demo-workflow", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return { agent: await service.newDemoWorkflow(id) };
+  });
+
   app.get("/api/runs/:id", async (request) => {
     const { id } = runIdParams.parse(request.params);
     return { run: service.getRun(id) };
+  });
+
+  app.get("/api/runs/:id/evidence", async (request) => {
+    const { id } = runIdParams.parse(request.params);
+    return { evidence: await service.getRunEvidence(id) };
+  });
+
+  app.post("/api/runs/:id/retry", async (request, reply) => {
+    const { id } = runIdParams.parse(request.params);
+    return reply.code(202).send({ run: await service.retryRun(id) });
   });
 
   if (config.nodeEnv === "production") {

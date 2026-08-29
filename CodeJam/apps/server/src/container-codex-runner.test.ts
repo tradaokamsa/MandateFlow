@@ -17,19 +17,26 @@ describe("Container Codex runner", () => {
       CONTAINER_RUNTIME_IMAGE: "runtime:test",
       CONTAINER_USER: "501:20",
       RUNTIME_INSTANCE_ID: "test-instance",
+      MANDATEFLOW_ENABLED: "true",
+      MANDATEFLOW_CONTROL_TOKEN:
+        "mfc1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      APP_AUTH_TOKEN: "a-secure-local-test-token",
+      MANDATEFLOW_CONTAINER_NETWORK: "mandateflow-test",
     });
     const args = buildContainerRunArgs(
       {
+        runId: "run/unsafe",
         agentId: "agent/unsafe",
         workspacePath: "/tmp/agent-workspace",
         prompt: "write a small program",
         threadId: null,
+        mandateFlowCapability: "mfr1_secret-that-must-not-appear-in-argv",
       },
       config,
     );
 
-    expect(containerName("agent/unsafe", "test-instance")).toBe(
-      "launchpad-test-instance-agent-unsafe",
+    expect(containerName("run/unsafe", "test-instance")).toBe(
+      "launchpad-test-instance-run-run-unsafe",
     );
     expect(args).toContain("runtime:test");
     expect(args).toContain("type=bind,src=/tmp/agent-workspace,dst=/workspace");
@@ -38,8 +45,12 @@ describe("Container Codex runner", () => {
     expect(args).toContain("workspace-write");
     expect(args).toContain("/workspace");
     expect(args).toContain("io.codejam.instance-id=test-instance");
+    expect(args).toContain("io.codejam.run-id=run/unsafe");
+    expect(args).toContain("mandateflow-test");
+    expect(args).toContain("MANDATEFLOW_RUN_CAPABILITY");
     expect(args).toContain("keep-id");
     expect(args).not.toContain("secret-that-must-not-appear-in-argv");
+    expect(args).not.toContain("mfr1_secret-that-must-not-appear-in-argv");
   });
 
   it("resumes a thread inside the mounted Runtime workspace", () => {
@@ -50,10 +61,12 @@ describe("Container Codex runner", () => {
     });
     const args = buildContainerRunArgs(
       {
+        runId: "run-123",
         agentId: "agent",
         workspacePath: "/tmp/workspace",
         prompt: "continue",
         threadId: "thread-123",
+        mandateFlowCapability: "",
       },
       config,
     );

@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Database } from "./types.js";
 
 const emptyDatabase = (): Database => ({
-  version: 1,
+  version: 2,
   agents: [],
   messages: [],
   runs: [],
@@ -19,11 +19,12 @@ export class JsonStore {
     await mkdir(path.dirname(this.filePath), { recursive: true });
     try {
       const raw = await readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as Database;
-      if (parsed.version !== 1 || !Array.isArray(parsed.agents)) {
+      const parsed = JSON.parse(raw) as Database | { version: 1; agents: unknown[]; messages: unknown[]; runs: unknown[] };
+      if (![1, 2].includes(parsed.version) || !Array.isArray(parsed.agents)) {
         throw new Error("Unsupported database format");
       }
-      this.data = parsed;
+      this.data = parsed.version === 1 ? migrateV1(parsed) : parsed;
+      if (parsed.version === 1) await this.persist(this.data);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -57,4 +58,30 @@ export class JsonStore {
     });
     await rename(temporaryPath, this.filePath);
   }
+}
+
+function migrateV1(legacy: {
+  version: 1;
+  agents: unknown[];
+  messages: unknown[];
+  runs: unknown[];
+}): Database {
+  return {
+    version: 2,
+    agents: legacy.agents.map((value) => ({
+      ...(value as Database["agents"][number]),
+      activePolicyContextId: null,
+    })),
+    messages: legacy.messages as Database["messages"],
+    runs: legacy.runs.map((value) => ({
+      ...(value as Database["runs"][number]),
+      policyContextId: null,
+      runGrantId: null,
+      retryOfRunId: null,
+      mandateStatus: "closed" as const,
+      capabilityFingerprint: null,
+      grantFingerprint: null,
+      runtimeInstanceId: null,
+    })),
+  };
 }

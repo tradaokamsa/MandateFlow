@@ -6,6 +6,10 @@ import type { AgentService } from "./agent-service.js";
 const service = {
   listAgents: () => [],
   systemInfo: async () => ({}),
+  healthInfo: async () => ({
+    mandateFlowEnabled: false,
+    mandateFlowReady: false,
+  }),
 } as unknown as AgentService;
 
 describe("HTTP boundary", () => {
@@ -16,6 +20,12 @@ describe("HTTP boundary", () => {
     );
     const denied = await app.inject({ method: "GET", url: "/api/agents" });
     expect(denied.statusCode).toBe(401);
+    const health = await app.inject({ method: "GET", url: "/api/health" });
+    expect(health.json()).toMatchObject({
+      ok: true,
+      mandateFlowEnabled: false,
+      mandateFlowReady: false,
+    });
 
     const allowed = await app.inject({
       method: "GET",

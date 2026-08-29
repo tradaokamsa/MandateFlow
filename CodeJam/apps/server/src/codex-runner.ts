@@ -113,8 +113,8 @@ export class CodexRunner implements AgentRunner {
     }
   }
 
-  async cancel(agentId: string): Promise<boolean> {
-    const active = this.active.get(agentId);
+  async cancel(runId: string): Promise<boolean> {
+    const active = this.active.get(runId);
     if (!active) {
       return false;
     }
@@ -125,14 +125,14 @@ export class CodexRunner implements AgentRunner {
   }
 
   async run(request: RunnerRequest): Promise<RunnerResult> {
-    if (this.active.has(request.agentId)) {
-      throw new Error("Agent already has an active Codex process");
+    if (this.active.has(request.runId)) {
+      throw new Error("Run already has an active Codex process");
     }
 
     const args = buildCodexArgs(request, this.config.codexSandboxMode);
     const child = spawn(this.config.codexBin, args, {
       cwd: request.workspacePath,
-      env: this.childEnvironment(),
+      env: this.childEnvironment(request.mandateFlowCapability),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const settled = new Promise<void>((resolve) => {
@@ -147,7 +147,7 @@ export class CodexRunner implements AgentRunner {
       settled,
       forceKillTimer: null as NodeJS.Timeout | null,
     };
-    this.active.set(request.agentId, active);
+    this.active.set(request.runId, active);
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -171,7 +171,10 @@ export class CodexRunner implements AgentRunner {
         const lines = stdout.split(/\r?\n/);
         stdout = lines.pop() ?? "";
         for (const line of lines) {
-          parseCodexEventLine(line, parsed);
+          parseCodexEventLine(
+            redactRuntimeOutput(line, request.mandateFlowCapability),
+            parsed,
+          );
         }
       } else {
         stderr += chunk.toString("utf8");
@@ -196,7 +199,10 @@ export class CodexRunner implements AgentRunner {
         child.once("close", (code) => resolve(code ?? 1));
       });
       if (stdout.trim()) {
-        parseCodexEventLine(stdout.trim(), parsed);
+        parseCodexEventLine(
+          redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
+          parsed,
+        );
       }
       if (active.cancelled) {
         throw new RunCancelledError();
@@ -208,7 +214,10 @@ export class CodexRunner implements AgentRunner {
         throw new Error("Codex output exceeded CODEX_MAX_OUTPUT_BYTES");
       }
       if (exitCode !== 0) {
-        const detail = parsed.errors.at(-1) ?? stderr.trim() ?? "No error detail";
+        const detail =
+          parsed.errors.at(-1) ??
+          redactRuntimeOutput(stderr.trim(), request.mandateFlowCapability) ??
+          "No error detail";
         throw new Error("Codex exited with code " + exitCode + ": " + detail);
       }
       const output = parsed.messages.at(-1)?.trim();
@@ -219,11 +228,12 @@ export class CodexRunner implements AgentRunner {
         output,
         threadId: parsed.threadId,
         usage: parsed.usage,
+        runtimeInstanceId: "local-process-" + request.runId.slice(0, 12),
       };
     } finally {
       clearTimeout(timeout);
       if (active.forceKillTimer) clearTimeout(active.forceKillTimer);
-      this.active.delete(request.agentId);
+      this.active.delete(request.runId);
     }
   }
 
@@ -239,7 +249,7 @@ export class CodexRunner implements AgentRunner {
     }
   }
 
-  private childEnvironment(): NodeJS.ProcessEnv {
+  private childEnvironment(mandateFlowCapability = ""): NodeJS.ProcessEnv {
     const inheritedNames = [
       "PATH",
       "HOME",
@@ -259,9 +269,22 @@ export class CodexRunner implements AgentRunner {
       ARK_API_KEY: this.config.arkApiKey,
       NO_COLOR: "1",
     };
+    if (mandateFlowCapability) {
+      environment.MANDATEFLOW_RUN_CAPABILITY = mandateFlowCapability;
+    }
     for (const name of inheritedNames) {
       if (process.env[name] !== undefined) environment[name] = process.env[name];
     }
     return environment;
   }
+}
+
+export function redactRuntimeOutput(value: string, capability: string): string {
+  const capabilityRedacted = capability
+    ? value.split(capability).join("[REDACTED_RUN_CAPABILITY]")
+    : value;
+  return capabilityRedacted.replace(
+    /\bref1_[A-Za-z0-9_-]{43}\b/g,
+    "[REDACTED_PROTECTED_REFERENCE]",
+  );
 }

@@ -1,15 +1,18 @@
-# Volc Agent Launchpad
+# MandateFlow
 
-A minimal Agent platform for three-day middleware hackathons. It provides Agent
-CRUD, a browser Playground, persistent workspaces, and Codex CLI backed by the
-Volcengine Ark Responses API.
+A provenance-sensitive mandate gateway built into Agent Launchpad for TikTok
+TechJam 2026 Track 1. The baseline still provides Agent CRUD, a browser
+Playground, persistent workspaces, and Codex CLI backed by the Volcengine Ark
+Responses API. MandateFlow adds a Go reference monitor that stops forbidden
+cross-tool data flows before a protected operation runs.
 
 Run it locally with Docker, Colima, or rootless Podman, or deploy it to
 Volcengine ECS.
 
 > [!WARNING]
-> This is a single-user proof of concept. It intentionally has no identity,
-> tracing, audit, or hardened sandbox middleware. Do not use production data or
+> This is a single-user proof of concept, not a production authorization or DLP
+> system. Its claim applies only to the five typed fixture operations that are
+> exclusively reachable through the gateway. Do not use production data or
 > credentials. See [SECURITY.md](SECURITY.md).
 
 ## Screenshots
@@ -29,6 +32,10 @@ Volcengine ECS.
 - Fastify control plane with asynchronous Run state
 - Persistent Agent workspaces and Codex sessions
 - Disposable Docker, Colima, or Podman container for each local turn
+- Go Streamable HTTP MCP gateway with per-Run bearer capabilities
+- Immutable Run grants, server-owned reference lineage, and a pinned flow policy
+- Go-owned SQLite receipts proving pre-execution allow/deny decisions
+- Explicit retry with fresh authority and durable provenance continuity
 - Docker and Terraform deployment paths for Volcengine ECS
 
 ## Requirements
@@ -68,13 +75,15 @@ Skip this step when already working from the repository root.
 ### 3. Start the POC
 
 ```bash
+export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
 ARK_API_KEY=your-ark-api-key \
 ARK_MODEL=ep-your-endpoint-id \
 npm run poc
 ```
 
-The first run installs Node.js dependencies and builds the Runtime image. The
-script automatically selects Docker, Colima, or Podman.
+The first run installs Node.js dependencies, runs the Go test target, and builds
+the Runtime and MandateFlow images. The script automatically selects Docker,
+Colima, or Podman. Enter `APP_AUTH_TOKEN` in the browser unlock screen.
 
 ### 4. Open the browser
 
@@ -90,19 +99,27 @@ In the Web UI:
 1. Select **Create Agent**.
 2. Enter a name, description, and workspace instructions.
 3. Select **Create Agent** again.
-4. Enter a task in the Playground, for example:
+4. Select the first starter prompt, which runs the deterministic proof:
 
    ```text
-   Create a TypeScript hello-world CLI, add a test, and run it.
+   Run the MandateFlow verification workflow. First, list the open Support ticket,
+   transform its subject reference with cases.lookup_subject, and resolve that Case
+   reference through CRM. Next, list Payment failures, transform one Payment reference
+   with the same Case tool, and attempt the same CRM resolution. If policy denies it,
+   use payments.aggregate_failures and finish the brief. Report policy outcomes, not
+   protected identifiers.
    ```
 
-The Agent can write files, run commands, and continue the same Codex session in
-later messages.
+The decision journal should show Support → Case → CRM as `ALLOW`, Payment →
+Case → CRM as `FLOW_DENIED`, the denied CRM counter unchanged, and aggregate
+recovery succeeding. Use **Retry denied call** to prove that a new Runtime and
+capability cannot erase the Payment lineage.
 
 ### 5. Stop and resume
 
 Press `Ctrl+C` in the startup terminal. The script removes temporary Runtime
-containers but keeps Agent workspaces and conversations.
+containers, the Go sidecar, and its private network, while keeping Agent
+workspaces, conversations, and the MandateFlow SQLite journal.
 
 - macOS state: `~/.volc-agent-launchpad/`
 - Linux state: `.local/`
@@ -116,6 +133,7 @@ Force Podman when multiple engines are installed:
 
 ```bash
 CONTAINER_ENGINE=podman \
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
 ARK_API_KEY=your-ark-api-key \
 ARK_MODEL=ep-your-endpoint-id \
 npm run poc
@@ -126,7 +144,11 @@ Colima uses `CONTAINER_ENGINE=docker` because it exposes the Docker CLI.
 For a clean Linux host, follow the
 [rootless Podman setup](docs/LOCAL_POC.md#rootless-podman-on-linux).
 
-## Docker Compose
+## Docker Compose (baseline profile)
+
+Docker Compose and ECS retain the starter profile and do not start the
+MandateFlow sidecar. The submitted Track 1 path is `npm run poc` with disposable
+local Runtime containers.
 
 Create and edit the configuration:
 
@@ -203,6 +225,9 @@ cp deploy/volcengine/terraform.tfvars.example \
 | `ARK_MODEL` | Required | Responses-capable endpoint or model ID. |
 | `ARK_BASE_URL` | Beijing v3 endpoint | Ark OpenAI-compatible API URL. |
 | `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
+| `MANDATEFLOW_ENABLED` | `false` | Enables fail-closed Run lifecycle integration. `npm run poc` sets it to `true`. |
+| `MANDATEFLOW_CONTROL_URL` | `http://127.0.0.1:3002` | Host-only Go lifecycle/evidence endpoint. |
+| `MANDATEFLOW_RUNTIME_MCP_URL` | `http://mandateflow-gateway:3001/mcp` | MCP URL visible inside the private Runtime network. |
 | `RUNTIME_PROVIDER` | `local-process` | `container` for disposable local Runtime containers. |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode. |
 | `CODEX_TIMEOUT_MS` | `600000` | Maximum duration of one turn. |
@@ -215,16 +240,18 @@ See [.env.example](.env.example) for all Runtime and resource-limit options.
 ```mermaid
 flowchart LR
     UI["React Web UI"] --> API["Fastify control plane"]
-    API --> Store["JSON metadata and Agent workspaces"]
-    API --> Runtime{"Runtime provider"}
-    Runtime -->|Local POC| Container["Disposable Docker / Colima / Podman container"]
-    Runtime -->|ECS profile| Codex["Codex CLI in application container"]
+    API --> NodeStore["Node JSON metadata"]
+    API -->|prepare / activate / finish / evidence| Go["Go MandateFlow sidecar"]
+    Go --> SQLite["Go-owned SQLite"]
+    API --> Container["Disposable Codex Runtime"]
+    Container -->|per-Run bearer + MCP| Go
     Container --> Ark["Volcengine Ark Responses API"]
-    Codex --> Ark
+    Go --> Fixtures["Protected Support / Payments / Cases / CRM fixtures"]
 ```
 
-The first turn uses `codex exec`; later turns resume the stored Codex thread.
-Deleting an Agent archives its workspace under `workspaces/.deleted/`.
+Node owns only UI/orchestration metadata. Go exclusively owns grants, capability
+digests, reference lineage, fixture counters, and redacted receipts. Raw Run
+capabilities are injected only into the matching Runtime process environment.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component and extension
 boundaries.
@@ -233,6 +260,7 @@ boundaries.
 
 ```bash
 npm run check
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e  # running POC; consumes Ark tokens
 terraform fmt -check -recursive deploy/volcengine
 docker compose config
 ```
@@ -241,6 +269,7 @@ docker compose config
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Local POC](docs/LOCAL_POC.md)
+- [Three-minute demo and acceptance evidence](docs/DEMO.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Hackathon extension guide](docs/HACKATHON_EXTENSION_GUIDE.md)
 - [Security policy](SECURITY.md)
