@@ -336,12 +336,16 @@ export class AgentService {
     if (this.config.mandateFlowEnabled) {
       await this.ensureMandateFlowReady();
       await this.requireFinalizedAuthority(agentId);
-      await this.ensureMandateContextUsable(agentId);
     }
     return this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === agentId);
       if (!agent) throw new HttpError(404, "Agent not found");
-      if (agent.status === "busy") {
+      const hasActiveRun = database.runs.some(
+        (run) =>
+          run.agentId === agentId &&
+          (run.status === "queued" || run.status === "running"),
+      );
+      if (agent.status === "busy" || hasActiveRun) {
         throw new HttpError(409, "Stop the active Run before starting a new workflow");
       }
       agent.activePolicyContextId = null;
@@ -369,7 +373,9 @@ export class AgentService {
       runtime:
         this.config.runtimeProvider === "container"
           ? "Codex CLI in " + this.config.containerEngine + " Runtime"
-          : "Codex CLI in application container",
+          : this.config.runtimeProvider === "fixture"
+            ? "Deterministic MandateFlow fixture Runtime"
+            : "Codex CLI in application container",
       ...mandateFlowHealth,
       mandateFlowPolicy: this.config.mandateFlowEnabled
         ? "MIXED_OPERATIONS_BRIEF · mixed-operations-flow v1"
@@ -383,7 +389,7 @@ export class AgentService {
     retryOfRunId: string | null,
     createUserMessage: boolean,
   ): Promise<{ run: AgentRun; message: Message | null }> {
-    if (!isGroqConfigured(this.config)) {
+    if (this.config.runtimeProvider !== "fixture" && !isGroqConfigured(this.config)) {
       throw new HttpError(
         503,
         "Groq is not configured. Set GROQ_API_KEY; GROQ_MODEL is optional, then restart.",
@@ -505,7 +511,9 @@ export class AgentService {
           runtimeInstanceId:
             this.config.runtimeProvider === "container"
               ? containerName(run.id, this.config.runtimeInstanceId)
-              : "local-process-" + run.id.slice(0, 12),
+              : this.config.runtimeProvider === "fixture"
+                ? "fixture-runtime-" + run.id.slice(0, 12)
+                : "local-process-" + run.id.slice(0, 12),
           mode,
           policyContextId: agentAtStart.activePolicyContextId,
           predecessorRunId: predecessor?.id ?? null,
@@ -654,25 +662,6 @@ export class AgentService {
   private async ensureMandateFlowReady(): Promise<void> {
     if (!this.mandateFlow || !(await this.mandateFlow.ready())) {
       throw new HttpError(503, "MandateFlow is unavailable; no secure Runtime was started");
-    }
-  }
-
-  private async ensureMandateContextUsable(agentId: string): Promise<void> {
-    const agent = this.getAgent(agentId);
-    if (!agent.activePolicyContextId || !this.mandateFlow?.summary) return;
-    const mandateId = this.store
-      .snapshot()
-      .runs.filter(
-        (run) => run.agentId === agentId && run.policyContextId === agent.activePolicyContextId,
-      )
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.mandateId;
-    if (!mandateId) return;
-    const summary = await this.mandateFlow.summary(mandateId);
-    if (summary.status === "REVOKED") {
-      throw new HttpError(
-        409,
-        "This mandate was revoked. Start a New secure workflow before sending another message",
-      );
     }
   }
 

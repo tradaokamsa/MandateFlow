@@ -26,6 +26,7 @@ func New(service *mandateflow.Service) http.Handler {
 	addReferenceTool(server, service, "cases.lookup_subject", "Transform a customer-subject reference into an operations-case reference while preserving trusted provenance.")
 	addReferenceTool(server, service, "crm.resolve_customer", "Resolve an operations-case reference through CRM when its trusted provenance permits Support follow-up.")
 	addNoInputTool(server, service, "payments.aggregate_failures", "Return a safe aggregate summary of Payment failures without customer identifiers.")
+	server.AddReceivingMiddleware(filterToolsByGrant)
 
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
@@ -49,6 +50,44 @@ func New(service *mandateflow.Service) http.Handler {
 		request = request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal))
 		streamable.ServeHTTP(response, request)
 	})
+}
+
+// filterToolsByGrant keeps the complete registry available to callTool so a
+// direct call to an undiscovered operation still reaches the authoritative
+// execution-time scope check and produces a durable denial receipt. Discovery
+// is filtered only in the response to tools/list.
+func filterToolsByGrant(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+		result, err := next(ctx, method, request)
+		if err != nil || method != "tools/list" {
+			return result, err
+		}
+		list, ok := result.(*mcp.ListToolsResult)
+		if !ok {
+			return result, nil
+		}
+		principal, ok := ctx.Value(principalContextKey{}).(mandateflow.Principal)
+		if !ok {
+			return result, nil
+		}
+		filtered := make([]*mcp.Tool, 0, len(list.Tools))
+		for _, tool := range list.Tools {
+			if tool != nil && principalAllowsTool(principal, tool.Name) {
+				filtered = append(filtered, tool)
+			}
+		}
+		list.Tools = filtered
+		return list, nil
+	}
+}
+
+func principalAllowsTool(principal mandateflow.Principal, toolName string) bool {
+	for _, permission := range principal.Permissions {
+		if permission.Tool == toolName {
+			return true
+		}
+	}
+	return false
 }
 
 func addNoInputTool(server *mcp.Server, service *mandateflow.Service, name, description string) {
