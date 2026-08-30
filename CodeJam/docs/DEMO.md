@@ -42,8 +42,14 @@ CRM method; only trusted transitive provenance changes the decision.
 Fast checks do not call Groq:
 
 ```bash
+npm run test:server
+npm run check:fast
 npm run check
 ```
+
+Use `npm run test:server:watch` for the interactive server-test loop. The
+fast check requires a local Go 1.23+ toolchain, runs `gofmt`, `go vet`, and
+race-enabled Go tests, and does not build production bundles or Docker images.
 
 Against an already running POC, run the actual Codex/Groq workflow explicitly:
 

@@ -22,6 +22,11 @@ if command -v go >/dev/null 2>&1; then
   exit 0
 fi
 
+if [[ "${MANDATEFLOW_REQUIRE_GO:-0}" == "1" ]]; then
+  printf 'Go is required for the fast MandateFlow check; install Go 1.23+ or run npm run check for the container fallback.\n' >&2
+  exit 2
+fi
+
 engine="${CONTAINER_ENGINE:-docker}"
 command -v "$engine" >/dev/null 2>&1 || {
   printf 'Go or a container engine is required for MandateFlow checks.\n' >&2
