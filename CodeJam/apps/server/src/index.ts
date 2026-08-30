@@ -2,6 +2,7 @@ import path from "node:path";
 import { AgentService } from "./agent-service.js";
 import { createApp } from "./app.js";
 import { loadConfig, writeCodexConfig } from "./config.js";
+import { MandateFlowClient } from "./mandateflow-client.js";
 import { createRunner } from "./runner-factory.js";
 import { JsonStore } from "./store.js";
 import { WorkspaceManager } from "./workspace.js";
@@ -12,7 +13,13 @@ await writeCodexConfig(config);
 const store = new JsonStore(path.join(config.dataDirectory, "launchpad.json"));
 const workspaces = new WorkspaceManager(config.workspaceRoot);
 const runner = createRunner(config);
-const service = new AgentService(config, store, workspaces, runner);
+const mandateFlow = config.mandateFlowEnabled
+  ? new MandateFlowClient(
+      config.mandateFlowControlUrl,
+      config.mandateFlowControlToken,
+    )
+  : null;
+const service = new AgentService(config, store, workspaces, runner, mandateFlow);
 await service.initialize();
 
 const app = await createApp(config, service);

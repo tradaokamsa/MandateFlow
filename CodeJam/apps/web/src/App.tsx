@@ -1,18 +1,43 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, setAuthToken } from "./api";
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type {
+  Agent,
+  AgentRun,
+  MandateEvidence,
+  MandateSummary,
+  Message,
+  DemoOwnerPrincipal,
+  SystemInfo,
+} from "./types";
+
+const heroPrompt =
+  "Run the MandateFlow verification workflow. First, list the open Support ticket, " +
+  "transform its subject reference with cases.lookup_subject, and resolve that Case " +
+  "reference through CRM. Next, list Payment failures, transform one Payment reference " +
+  "with the same Case tool, and attempt the same CRM resolution. If policy denies it, " +
+  "use payments.aggregate_failures and finish the brief. Report policy outcomes, not " +
+  "protected identifiers.";
 
 const starterPrompts = [
+  heroPrompt,
   "Create a small TypeScript CLI that prints a weather summary from sample JSON.",
   "Inspect this workspace and explain what you would improve first.",
   "Build a responsive single-page todo app with tests.",
 ];
 
-const emptyForm = {
+const emptyForm: {
+  name: string;
+  description: string;
+  ownerPrincipal: DemoOwnerPrincipal;
+  instructions: string;
+} = {
   name: "",
   description: "",
+  ownerPrincipal: "user-a",
   instructions:
-    "Help me build and test software in this workspace. Keep changes small and explain the result.",
+    "Help me build and test software in this workspace. Keep changes small and explain the result. " +
+    "When MandateFlow tools are available, preserve opaque references exactly, obey protected-tool decisions, " +
+    "and use an offered safe alternative after a policy denial.",
 };
 
 function formatTime(value: string): string {
@@ -20,6 +45,17 @@ function formatTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function shortId(value: string): string {
+  return value.length > 18 ? value.slice(0, 10) + "…" + value.slice(-5) : value;
 }
 
 function StatusPill({ status }: { status: Agent["status"] }) {
@@ -45,11 +81,22 @@ export default function App() {
   const [form, setForm] = useState(emptyForm);
   const [prompt, setPrompt] = useState("");
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
+  const [evidence, setEvidence] = useState<MandateEvidence | null>(null);
+  const [mandate, setMandate] = useState<MandateSummary | null>(null);
+  const [revokePending, setRevokePending] = useState(false);
+  const [showRevokeConfirm, setShowRevokeConfirm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [revokeNotice, setRevokeNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [authInput, setAuthInput] = useState("");
   const messageEnd = useRef<HTMLDivElement>(null);
+  const confirmationDialog = useRef<HTMLElement>(null);
+  const revokeTrigger = useRef<HTMLButtonElement>(null);
+  const deleteTrigger = useRef<HTMLButtonElement>(null);
+  const wasRevokeConfirming = useRef(false);
+  const wasDeleteConfirming = useRef(false);
   const selectedIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   const pollingRunIds = useRef(new Set<string>());
@@ -58,6 +105,17 @@ export default function App() {
   const selected = useMemo(
     () => agents.find((agent) => agent.id === selectedId) ?? null,
     [agents, selectedId],
+  );
+  const hasRetryableDenial = Boolean(
+    activeRun &&
+      evidence?.receipts.some(
+        (receipt) =>
+          receipt.runId === activeRun.id &&
+          receipt.tool === "crm.resolve_customer" &&
+          receipt.staticScopeDecision === "ALLOW" &&
+          receipt.provenanceDecision === "DENY" &&
+          !receipt.downstreamInvoked,
+      ),
   );
 
   const refreshAgents = useCallback(async () => {
@@ -74,6 +132,24 @@ export default function App() {
     const result = await api.messages(agentId);
     if (mountedRef.current && selectedIdRef.current === agentId) {
       setMessages(result.messages);
+    }
+  }, []);
+
+  const refreshEvidence = useCallback(async (run: AgentRun) => {
+    if (!run.policyContextId) {
+      setEvidence(null);
+      return;
+    }
+    const result = await api.evidence(run.id);
+    if (mountedRef.current && selectedIdRef.current === run.agentId) {
+      setEvidence(result.evidence);
+    }
+  }, []);
+
+  const refreshMandate = useCallback(async (agentId: string) => {
+    const result = await api.mandate(agentId);
+    if (mountedRef.current && selectedIdRef.current === agentId) {
+      setMandate(result.mandate);
     }
   }, []);
 
@@ -98,6 +174,9 @@ export default function App() {
 
   useEffect(() => {
     setActiveRun(null);
+    setEvidence(null);
+    setMandate(null);
+    setRevokeNotice(null);
     setShowSettings(false);
     if (!selectedId) {
       setMessages([]);
@@ -112,18 +191,30 @@ export default function App() {
           void pollRun(latest.id, selectedId).catch((reason) =>
             setError(reason instanceof Error ? reason.message : String(reason)),
           );
+        } else if (latest?.policyContextId) {
+          void refreshEvidence(latest).catch((reason) =>
+            setError(reason instanceof Error ? reason.message : String(reason)),
+          );
         }
       })
       .catch((reason) =>
         setError(reason instanceof Error ? reason.message : String(reason)),
       );
-  }, [refreshMessages, selectedId]);
+  }, [refreshEvidence, refreshMessages, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId || !system?.mandateFlowEnabled) return;
+    void refreshMandate(selectedId).catch((reason) =>
+      setError(reason instanceof Error ? reason.message : String(reason)),
+    );
+  }, [refreshMandate, selectedId, system?.mandateFlowEnabled]);
 
   useEffect(() => {
     if (selected) {
       setForm({
         name: selected.name,
         description: selected.description,
+        ownerPrincipal: selected.ownerPrincipal,
         instructions: selected.instructions,
       });
     }
@@ -132,6 +223,41 @@ export default function App() {
   useEffect(() => {
     messageEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activeRun]);
+
+  useEffect(() => {
+    if (!showRevokeConfirm && !showDeleteConfirm) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowRevokeConfirm(false);
+        setShowDeleteConfirm(false);
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusable = confirmationDialog.current?.querySelectorAll<HTMLElement>(
+          "button, input, select, textarea, [tabindex]:not([tabindex='-1'])",
+        );
+        if (!focusable?.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showDeleteConfirm, showRevokeConfirm]);
+
+  useEffect(() => {
+    if (wasRevokeConfirming.current && !showRevokeConfirm) revokeTrigger.current?.focus();
+    if (wasDeleteConfirming.current && !showDeleteConfirm) deleteTrigger.current?.focus();
+    wasRevokeConfirming.current = showRevokeConfirm;
+    wasDeleteConfirming.current = showDeleteConfirm;
+  }, [showDeleteConfirm, showRevokeConfirm]);
 
   const createAgent = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -156,7 +282,8 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      await api.updateAgent(selected.id, form);
+      const { ownerPrincipal: _ownerPrincipal, ...editable } = form;
+      await api.updateAgent(selected.id, editable);
       await refreshAgents();
       setShowSettings(false);
     } catch (reason) {
@@ -186,9 +313,7 @@ export default function App() {
 
   const deleteAgent = async () => {
     if (!selected) return;
-    if (!window.confirm("Delete " + selected.name + "? Its workspace will be archived.")) {
-      return;
-    }
+    setShowDeleteConfirm(false);
     setBusy(true);
     setError(null);
     try {
@@ -210,13 +335,95 @@ export default function App() {
         if (!mountedRef.current) return;
         const result = await api.run(runId);
         if (selectedIdRef.current === agentId) setActiveRun(result.run);
+        if (result.run.mandateId) {
+          void refreshMandate(agentId).catch((reason) =>
+            setError(reason instanceof Error ? reason.message : String(reason)),
+          );
+        }
         if (!["queued", "running"].includes(result.run.status)) {
-          await Promise.all([refreshMessages(agentId), refreshAgents()]);
+          await Promise.all([
+            refreshMessages(agentId),
+            refreshAgents(),
+            result.run.policyContextId ? refreshEvidence(result.run) : Promise.resolve(),
+            refreshMandate(agentId),
+          ]);
           return;
         }
       }
     } finally {
       pollingRunIds.current.delete(runId);
+    }
+  };
+
+  const retryRun = async () => {
+    if (!activeRun) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.retryRun(activeRun.id);
+      setEvidence(null);
+      setActiveRun(result.run);
+      await refreshMandate(result.run.agentId);
+      setAgents((current) =>
+        current.map((agent) =>
+          agent.id === result.run.agentId ? { ...agent, status: "busy" } : agent,
+        ),
+      );
+      await pollRun(result.run.id, result.run.agentId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      await refreshAgents();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const newDemoWorkflow = async () => {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.newDemoWorkflow(selected.id);
+      setActiveRun(null);
+      setEvidence(null);
+      setMandate(null);
+      setRevokeNotice(null);
+      setPrompt(heroPrompt);
+      await refreshAgents();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revokeMandate = async () => {
+    if (!mandate || revokePending) return;
+    setShowRevokeConfirm(false);
+    setRevokePending(true);
+    setRevokeNotice(null);
+    setError(null);
+    try {
+      const result = await api.revokeMandate(mandate.mandateId);
+      setMandate(result.mandate);
+      setActiveRun(result.run);
+      setAgents((current) =>
+        current.map((agent) => (agent.id === result.agent.id ? result.agent : agent)),
+      );
+      setRevokeNotice(
+        "Mandate revoked. The active Runtime was cancelled and this workflow is locked.",
+      );
+      await Promise.all([
+        refreshMessages(result.agent.id),
+        refreshAgents(),
+        result.run?.policyContextId ? refreshEvidence(result.run) : Promise.resolve(),
+        refreshMandate(result.agent.id),
+      ]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setRevokeNotice("Mandate revocation failed; no cancellation was claimed.");
+    } finally {
+      setRevokePending(false);
     }
   };
 
@@ -269,8 +476,8 @@ export default function App() {
     return (
       <main className="auth-screen">
         <section className="auth-card" aria-live="polite">
-          <div className="brand-mark">A</div>
-          <span className="eyebrow">Agent Launchpad</span>
+          <div className="brand-mark">M</div>
+          <span className="eyebrow">MandateFlow</span>
           <h1>Connecting to the control plane</h1>
           {error ? <div className="error-banner" role="alert">{error}</div> : <Spinner />}
         </section>
@@ -281,9 +488,9 @@ export default function App() {
   if (authRequired) {
     return (
       <main className="auth-screen">
-        <form className="auth-card" onSubmit={unlock}>
-          <div className="brand-mark">A</div>
-          <span className="eyebrow">Agent Launchpad</span>
+        <form className="auth-card" onSubmit={unlock} noValidate>
+          <div className="brand-mark">M</div>
+          <span className="eyebrow">MandateFlow</span>
           <h1>Enter the access token</h1>
           <p>This shared demo token is configured by the platform operator.</p>
           {error && <div className="error-banner" role="alert">{error}</div>}
@@ -299,7 +506,7 @@ export default function App() {
             />
           </label>
           <button className="button button-primary" disabled={busy || !authInput.trim()}>
-            {busy ? <Spinner /> : "Open Launchpad"}
+            {busy ? <Spinner /> : "Open MandateFlow"}
           </button>
         </form>
       </main>
@@ -310,9 +517,9 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">A</div>
+          <div className="brand-mark">M</div>
           <div>
-            <strong>Agent Launchpad</strong>
+            <strong>MandateFlow</strong>
             <span>
               {system?.runtimeProvider === "container"
                 ? "Local container · Codex CLI"
@@ -362,21 +569,25 @@ export default function App() {
           <span className="eyebrow">Runtime</span>
           <strong>{system?.runtime ?? "Checking…"}</strong>
           <span>
-            {system?.arkModel ?? "Ark model not configured"}
+            {system?.groqModel ?? "Groq model not configured"}
             {system?.containerEngine ? " · " + system.containerEngine : ""}
           </span>
         </div>
       </aside>
 
       <main className="main">
-        {!system?.arkConfigured || !system?.codexAvailable ? (
+        {!system?.groqConfigured ||
+        !system?.codexAvailable ||
+        (system?.mandateFlowEnabled && !system.mandateFlowReady) ? (
           <div className="config-banner">
             <span>!</span>
             <div>
               <strong>Runtime configuration needed</strong>
               <p>
-                {!system?.arkConfigured
-                  ? "Set ARK_API_KEY and ARK_MODEL in .env before using the Playground."
+                {!system?.groqConfigured
+                  ? "Set GROQ_API_KEY in .env before using the Playground; GROQ_MODEL is optional."
+                  : system?.mandateFlowEnabled && !system.mandateFlowReady
+                    ? "The Go MandateFlow sidecar is unavailable. Secure Runs fail closed until it is ready."
                   : system.runtimeProvider === "container"
                     ? "The local container engine or Agent Runtime image is unavailable. Rerun npm run poc."
                     : "Codex CLI was not found. Use the Docker image or install @openai/codex."}
@@ -403,6 +614,24 @@ export default function App() {
                 <p>{selected.description || "A Codex coding Agent in an isolated workspace."}</p>
               </div>
               <div className="header-actions">
+                {system?.mandateFlowEnabled && (
+                  <button
+                    className="button button-ghost"
+                    onClick={newDemoWorkflow}
+                    disabled={busy || selected.status === "busy"}
+                  >
+                    New secure workflow
+                  </button>
+                )}
+                {system?.mandateFlowEnabled && activeRun?.status === "completed" && hasRetryableDenial && (
+                  <button
+                    className="button button-primary"
+                    onClick={retryRun}
+                    disabled={busy || selected.status === "busy" || !evidence || mandate?.status === "REVOKED"}
+                  >
+                    Retry denied call
+                  </button>
+                )}
                 <button
                   className="button button-ghost"
                   onClick={() => setShowSettings((value) => !value)}
@@ -419,7 +648,8 @@ export default function App() {
                 </button>
                 <button
                   className="button button-danger"
-                  onClick={deleteAgent}
+                  ref={deleteTrigger}
+                  onClick={() => setShowDeleteConfirm(true)}
                   disabled={busy || selected.status === "busy"}
                 >
                   Delete
@@ -428,7 +658,7 @@ export default function App() {
             </header>
 
             {showSettings && (
-              <form className="settings-panel" onSubmit={saveAgent}>
+              <form className="settings-panel" onSubmit={saveAgent} noValidate>
                 <div className="settings-title">
                   <div>
                     <span className="eyebrow">Agent configuration</span>
@@ -460,6 +690,7 @@ export default function App() {
                 <label>
                   System instructions
                   <textarea
+                    className="resize-none"
                     value={form.instructions}
                     onChange={(event) =>
                       setForm({ ...form, instructions: event.target.value })
@@ -484,10 +715,137 @@ export default function App() {
                   <h2>Build something with your Agent</h2>
                 </div>
                 <div className="session-info">
-                  <span className="pulse" />
-                  {selected.codexThreadId ? "Session connected" : "New session"}
+                  <span
+                    className={
+                      "pulse " +
+                      (system?.mandateFlowEnabled && !system.mandateFlowReady
+                        ? "pulse-denied"
+                        : "")
+                    }
+                  />
+                  {system?.mandateFlowEnabled
+                    ? system.mandateFlowReady
+                      ? "MandateFlow enforced"
+                      : "MandateFlow unavailable"
+                    : selected.codexThreadId
+                      ? "Session connected"
+                      : "New session"}
                 </div>
               </div>
+
+              {system?.mandateFlowEnabled && mandate && (
+                <section className="mandate-summary" aria-labelledby="mandate-summary-title">
+                  <div className="mandate-summary-heading">
+                    <div>
+                      <span className="eyebrow">Trusted mandate</span>
+                      <h3 id="mandate-summary-title">Mandate Summary</h3>
+                    </div>
+                    <span className={"mandate-state mandate-state-" + mandate.status.toLowerCase()}>
+                      {mandate.status}
+                    </span>
+                  </div>
+                  <div className="mandate-summary-grid">
+                    <div><span>Purpose</span><strong>{mandate.purposeId}</strong></div>
+                    <div><span>Owner principal</span><strong>{mandate.ownerPrincipal}</strong></div>
+                    <div title={mandate.agentPrincipal}><span>Agent principal</span><strong>{shortId(mandate.agentPrincipal)}</strong></div>
+                    <div title={mandate.policyContextId}><span>Policy context</span><strong>{shortId(mandate.policyContextId)}</strong></div>
+                    <div title={mandate.mandateId}><span>Mandate ID</span><strong>{mandate.mandateFingerprint}</strong></div>
+                    <div><span>Issued</span><strong>{formatDateTime(mandate.issuedAt)}</strong></div>
+                    <div><span>Expires</span><strong>{formatDateTime(mandate.expiresAt)}</strong></div>
+                    <div className="mandate-tools"><span>Granted tools</span><strong>{mandate.grantedPermissions.map((permission) => permission.tool).join(" · ")}</strong></div>
+                  </div>
+                  {mandate.status !== "ACTIVE" ? (
+                    <div className="mandate-revoked-note" role="status">
+                      {mandate.status === "REVOKED"
+                        ? mandate.revocationReason ?? "This mandate is revoked."
+                        : "This mandate is closed. Start a New secure workflow for fresh authority."}
+                      {mandate.revokedAt ? " · " + formatDateTime(mandate.revokedAt) : ""}
+                    </div>
+                  ) : (
+                    <button
+                      className="button button-danger revoke-button"
+                      ref={revokeTrigger}
+                      onClick={() => setShowRevokeConfirm(true)}
+                      disabled={revokePending}
+                    >
+                      {revokePending ? <><Spinner /> Revoking…</> : "Revoke mandate"}
+                    </button>
+                  )}
+                  {revokeNotice && <div className="mandate-status-message" role="status">{revokeNotice}</div>}
+                </section>
+              )}
+
+              {system?.mandateFlowEnabled && (
+                <section className="mandate-evidence" aria-live="polite">
+                  <div className="mandate-heading">
+                    <div>
+                      <span className="eyebrow">Trusted decision journal</span>
+                      <strong>
+                        {evidence
+                          ? "Provenance policy evidence"
+                          : activeRun && ["queued", "running"].includes(activeRun.status)
+                            ? "Collecting pre-execution decisions…"
+                            : "Start the verification workflow to produce evidence"}
+                      </strong>
+                    </div>
+                    {evidence && (
+                      <div className="mandate-facts">
+                        <span title={evidence.policyContextId}>
+                          context {shortId(evidence.policyContextId)}
+                        </span>
+                        <span>{evidence.grantFingerprint}</span>
+                        <span>{evidence.capabilityFingerprint}</span>
+                        <span className="counter-chip">CRM calls {evidence.crmCounter}</span>
+                      </div>
+                    )}
+                  </div>
+                  {evidence && (
+                    <>
+                      <div className="mandate-continuity">
+                        <span>{evidence.purposeId}</span>
+                        <span>{evidence.policyId} v{evidence.policyVersion}</span>
+                        <span>runtime {shortId(evidence.runtimeInstanceId)}</span>
+                        {evidence.retryOfRunId && (
+                          <span className="retry-chip">
+                            retry of {shortId(evidence.retryOfRunId)} · same context
+                          </span>
+                        )}
+                      </div>
+                      <div className="receipt-timeline">
+                        {evidence.receipts.slice(-8).map((receipt) => (
+                          <article
+                            className={
+                              "receipt-card receipt-" + receipt.decision.toLowerCase()
+                            }
+                            key={receipt.id}
+                          >
+                            <div className="receipt-title">
+                              <strong>{receipt.tool}</strong>
+                              <span>{receipt.decision}</span>
+                            </div>
+                            <div className="receipt-decisions">
+                              <span>scope {receipt.staticScopeDecision}</span>
+                              <span>flow {receipt.provenanceDecision}</span>
+                              <span>{receipt.outcome}</span>
+                            </div>
+                            <p>{receipt.reason}</p>
+                            {receipt.tool === "crm.resolve_customer" && (
+                              <small>
+                                CRM counter {receipt.counterBefore} → {receipt.counterAfter} · downstream {receipt.downstreamInvoked ? "invoked" : "not invoked"}
+                              </small>
+                            )}
+                            {receipt.causedByReceiptIds.length > 0 && (
+                              <small>
+                                caused by {receipt.causedByReceiptIds.map(shortId).join(" → ")}
+                              </small>
+                            )}
+                          </article>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </section>
+              )}
 
               <div className="messages">
                 {messages.length === 0 && !activeRun ? (
@@ -541,8 +899,9 @@ export default function App() {
                 <div ref={messageEnd} />
               </div>
 
-              <form className="composer" onSubmit={sendMessage}>
+              <form className="composer" onSubmit={sendMessage} noValidate>
                 <textarea
+                  className="resize-none"
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                   onKeyDown={(event) => {
@@ -559,7 +918,9 @@ export default function App() {
                   disabled={
                     selected.status === "stopped" ||
                     selected.status === "busy" ||
-                    activeRun != null && ["queued", "running"].includes(activeRun.status)
+                    (system?.mandateFlowEnabled === true && !system.mandateFlowReady) ||
+                    activeRun != null && ["queued", "running"].includes(activeRun.status) ||
+                    mandate?.status === "REVOKED"
                   }
                   rows={3}
                 />
@@ -573,7 +934,9 @@ export default function App() {
                       !prompt.trim() ||
                       selected.status === "stopped" ||
                       selected.status === "busy" ||
-                      (activeRun != null && ["queued", "running"].includes(activeRun.status))
+                      (system?.mandateFlowEnabled === true && !system.mandateFlowReady) ||
+                      (activeRun != null && ["queued", "running"].includes(activeRun.status)) ||
+                      mandate?.status === "REVOKED"
                     }
                     aria-label="Send message"
                   >
@@ -585,8 +948,8 @@ export default function App() {
           </>
         ) : (
           <div className="no-agent">
-            <div className="no-agent-art">A</div>
-            <span className="eyebrow">Agent Launchpad</span>
+            <div className="no-agent-art">M</div>
+            <span className="eyebrow">MandateFlow</span>
             <h1>Your runtime is ready for an Agent.</h1>
             <p>Create a workspace, give Codex a job, and continue the conversation here.</p>
             <button
@@ -602,12 +965,89 @@ export default function App() {
         )}
       </main>
 
+      {showRevokeConfirm && mandate && (
+        <div className="modal-backdrop" onMouseDown={() => setShowRevokeConfirm(false)}>
+          <section
+            className="modal confirmation-modal"
+            role="dialog"
+            aria-modal="true"
+            ref={confirmationDialog}
+            aria-labelledby="revoke-dialog-title"
+            aria-describedby="revoke-dialog-description"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Security action</span>
+                <h2 id="revoke-dialog-title">Revoke this mandate?</h2>
+              </div>
+              <button type="button" onClick={() => setShowRevokeConfirm(false)} aria-label="Close confirmation">×</button>
+            </div>
+            <p id="revoke-dialog-description">
+              This stops the active Runtime, invalidates its current capability, and prevents follow-up or retry calls in this workflow. The decision journal remains available.
+            </p>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="button button-ghost"
+                autoFocus
+                onClick={() => setShowRevokeConfirm(false)}
+              >
+                Keep mandate
+              </button>
+              <button type="button" className="button button-danger" onClick={revokeMandate}>
+                Revoke mandate
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {showDeleteConfirm && selected && (
+        <div className="modal-backdrop" onMouseDown={() => setShowDeleteConfirm(false)}>
+          <section
+            className="modal confirmation-modal"
+            role="dialog"
+            aria-modal="true"
+            ref={confirmationDialog}
+            aria-labelledby="delete-dialog-title"
+            aria-describedby="delete-dialog-description"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">Workspace action</span>
+                <h2 id="delete-dialog-title">Delete {selected.name}?</h2>
+              </div>
+              <button type="button" onClick={() => setShowDeleteConfirm(false)} aria-label="Close confirmation">×</button>
+            </div>
+            <p id="delete-dialog-description">
+              The Agent will be removed from this workspace and its folder will be archived.
+            </p>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="button button-ghost"
+                autoFocus
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                Keep Agent
+              </button>
+              <button type="button" className="button button-danger" onClick={deleteAgent}>
+                Delete Agent
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {showCreate && (
         <div className="modal-backdrop" onMouseDown={() => setShowCreate(false)}>
           <form
             className="modal"
             onSubmit={createAgent}
             onMouseDown={(event) => event.stopPropagation()}
+            noValidate
           >
             <div className="modal-heading">
               <div>
@@ -640,8 +1080,25 @@ export default function App() {
               />
             </label>
             <label>
+              Demo owner
+              <select
+                value={form.ownerPrincipal}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    ownerPrincipal: event.target.value as "user-a" | "user-b",
+                  })
+                }
+              >
+                <option value="user-a">User A · demo data</option>
+                <option value="user-b">User B · demo data</option>
+              </select>
+              <small className="field-help">Demo identity only; this is not real authentication.</small>
+            </label>
+            <label>
               Instructions
-              <textarea
+                  <textarea
+                    className="resize-none"
                 value={form.instructions}
                 onChange={(event) =>
                   setForm({ ...form, instructions: event.target.value })

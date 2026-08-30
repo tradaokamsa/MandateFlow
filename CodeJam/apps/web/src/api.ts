@@ -1,4 +1,11 @@
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type {
+  Agent,
+  AgentRun,
+  MandateEvidence,
+  MandateSummary,
+  Message,
+  SystemInfo,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -40,6 +47,7 @@ export const api = {
     name: string;
     description: string;
     instructions: string;
+    ownerPrincipal: "user-a" | "user-b";
   }) =>
     request<{ agent: Agent }>("/api/agents", {
       method: "POST",
@@ -69,6 +77,8 @@ export const api = {
     request<{ messages: Message[] }>("/api/agents/" + id + "/messages"),
   runs: (id: string) =>
     request<{ runs: AgentRun[] }>("/api/agents/" + id + "/runs"),
+  mandate: (id: string) =>
+    request<{ mandate: MandateSummary | null }>("/api/agents/" + id + "/mandate"),
   sendMessage: (id: string, content: string) =>
     request<{ run: AgentRun; message: Message }>(
       "/api/agents/" + id + "/messages",
@@ -78,4 +88,22 @@ export const api = {
       },
     ),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
+  evidence: (id: string) =>
+    request<{ evidence: MandateEvidence }>("/api/runs/" + id + "/evidence"),
+  retryRun: (id: string) =>
+    request<{ run: AgentRun }>("/api/runs/" + id + "/retry", {
+      method: "POST",
+    }),
+  newDemoWorkflow: (id: string) =>
+    request<{ agent: Agent }>("/api/agents/" + id + "/new-demo-workflow", {
+      method: "POST",
+    }),
+  revokeMandate: (id: string) =>
+    request<{
+      mandate: MandateSummary;
+      agent: Agent;
+      run: AgentRun | null;
+    }>("/api/mandates/" + encodeURIComponent(id) + "/revoke", {
+      method: "POST",
+    }),
 };

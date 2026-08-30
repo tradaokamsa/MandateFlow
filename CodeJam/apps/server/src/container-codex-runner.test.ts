@@ -9,27 +9,34 @@ describe("Container Codex runner", () => {
   it("builds an isolated Docker/Podman-compatible invocation", () => {
     const config = loadConfig({
       NODE_ENV: "test",
-      ARK_API_KEY: "secret-that-must-not-appear-in-argv",
-      ARK_MODEL: "ep-test",
+      GROQ_API_KEY: "secret-that-must-not-appear-in-argv",
+      GROQ_MODEL: "openai/gpt-oss-20b",
       CODEX_HOME: "/tmp/codex-home",
       RUNTIME_PROVIDER: "container",
       CONTAINER_ENGINE: "podman",
       CONTAINER_RUNTIME_IMAGE: "runtime:test",
       CONTAINER_USER: "501:20",
       RUNTIME_INSTANCE_ID: "test-instance",
+      MANDATEFLOW_ENABLED: "true",
+      MANDATEFLOW_CONTROL_TOKEN:
+        "mfc1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      APP_AUTH_TOKEN: "a-secure-local-test-token",
+      MANDATEFLOW_CONTAINER_NETWORK: "mandateflow-test",
     });
     const args = buildContainerRunArgs(
       {
+        runId: "run/unsafe",
         agentId: "agent/unsafe",
         workspacePath: "/tmp/agent-workspace",
         prompt: "write a small program",
         threadId: null,
+        mandateFlowCapability: "mfr1_secret-that-must-not-appear-in-argv",
       },
       config,
     );
 
-    expect(containerName("agent/unsafe", "test-instance")).toBe(
-      "launchpad-test-instance-agent-unsafe",
+    expect(containerName("run/unsafe", "test-instance")).toBe(
+      "launchpad-test-instance-run-run-unsafe",
     );
     expect(args).toContain("runtime:test");
     expect(args).toContain("type=bind,src=/tmp/agent-workspace,dst=/workspace");
@@ -37,9 +44,20 @@ describe("Container Codex runner", () => {
     expect(args).toContain("501:20");
     expect(args).toContain("workspace-write");
     expect(args).toContain("/workspace");
+    expect(args).toContain("GROQ_API_KEY");
+    expect(args).toContain("GROQ_UPSTREAM_BASE_URL");
+    expect(args).toContain("GROQ_RESPONSES_PROXY_PORT=34567");
+    expect(args.join(" ")).toContain("/opt/launchpad/groq-responses-proxy.mjs");
+    expect(args.join(" ")).toContain(
+      'model_providers.groq.base_url="http://127.0.0.1:34567/openai/v1"',
+    );
     expect(args).toContain("io.codejam.instance-id=test-instance");
+    expect(args).toContain("io.codejam.run-id=run/unsafe");
+    expect(args).toContain("mandateflow-test");
+    expect(args).toContain("MANDATEFLOW_RUN_CAPABILITY");
     expect(args).toContain("keep-id");
     expect(args).not.toContain("secret-that-must-not-appear-in-argv");
+    expect(args).not.toContain("mfr1_secret-that-must-not-appear-in-argv");
   });
 
   it("resumes a thread inside the mounted Runtime workspace", () => {
@@ -50,14 +68,38 @@ describe("Container Codex runner", () => {
     });
     const args = buildContainerRunArgs(
       {
+        runId: "run-123",
         agentId: "agent",
         workspacePath: "/tmp/workspace",
         prompt: "continue",
         threadId: "thread-123",
+        mandateFlowCapability: "",
       },
       config,
     );
     expect(args.slice(-3)).toEqual(["resume", "thread-123", "continue"]);
     expect(args).not.toContain("keep-id");
+  });
+
+  it("mounts only the selected Agent Codex home", () => {
+    const config = loadConfig({
+      NODE_ENV: "test",
+      CODEX_HOME: "/tmp/codex-home",
+      RUNTIME_PROVIDER: "container",
+    });
+    const args = buildContainerRunArgs(
+      {
+        runId: "run-agent-home",
+        agentId: "agent-a",
+        workspacePath: "/tmp/workspace",
+        codexHomePath: "/tmp/codex-home/agents/agent-a",
+        prompt: "continue",
+        threadId: null,
+        mandateFlowCapability: "",
+      },
+      config,
+    );
+    expect(args).toContain("type=bind,src=/tmp/codex-home/agents/agent-a,dst=/codex-home");
+    expect(args).not.toContain("type=bind,src=/tmp/codex-home,dst=/codex-home");
   });
 });

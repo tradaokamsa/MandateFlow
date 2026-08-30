@@ -1,8 +1,15 @@
 import { execFile } from "node:child_process";
-import { spawn, type ChildProcess } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessByStdio,
+} from "node:child_process";
+import type { Readable } from "node:stream";
 import { promisify } from "node:util";
 import type { AppConfig } from "./config.js";
 import { RunCancelledError } from "./errors.js";
+import { GroqResponsesProxy } from "./groq-responses.js";
+import { redactRuntimeText } from "./trace.js";
 import type {
   AgentRunner,
   RunUsage,
@@ -23,8 +30,15 @@ export function buildCodexArgs(
   request: RunnerRequest,
   sandboxMode: AppConfig["codexSandboxMode"],
   workspacePath = request.workspacePath,
+  modelProviderBaseUrl?: string,
 ): string[] {
   const args = [
+    ...(modelProviderBaseUrl
+      ? [
+          "--config",
+          "model_providers.groq.base_url=" + JSON.stringify(modelProviderBaseUrl),
+        ]
+      : []),
     "exec",
     "--json",
     "--sandbox",
@@ -113,8 +127,8 @@ export class CodexRunner implements AgentRunner {
     }
   }
 
-  async cancel(agentId: string): Promise<boolean> {
-    const active = this.active.get(agentId);
+  async cancel(runId: string): Promise<boolean> {
+    const active = this.active.get(runId);
     if (!active) {
       return false;
     }
@@ -125,16 +139,29 @@ export class CodexRunner implements AgentRunner {
   }
 
   async run(request: RunnerRequest): Promise<RunnerResult> {
-    if (this.active.has(request.agentId)) {
-      throw new Error("Agent already has an active Codex process");
+    if (this.active.has(request.runId)) {
+      throw new Error("Run already has an active Codex process");
     }
 
-    const args = buildCodexArgs(request, this.config.codexSandboxMode);
-    const child = spawn(this.config.codexBin, args, {
-      cwd: request.workspacePath,
-      env: this.childEnvironment(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const proxy = new GroqResponsesProxy(this.config.groqBaseUrl);
+    let child: ChildProcessByStdio<null, Readable, Readable>;
+    try {
+      const proxyBaseUrl = await proxy.start();
+      const args = buildCodexArgs(
+        request,
+        this.config.codexSandboxMode,
+        request.workspacePath,
+        proxyBaseUrl,
+      );
+      child = spawn(this.config.codexBin, args, {
+        cwd: request.workspacePath,
+        env: this.childEnvironment(request.mandateFlowCapability, request.codexHomePath),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      await proxy.close();
+      throw error;
+    }
     const settled = new Promise<void>((resolve) => {
       child.once("close", () => resolve());
       child.once("error", () => resolve());
@@ -147,7 +174,7 @@ export class CodexRunner implements AgentRunner {
       settled,
       forceKillTimer: null as NodeJS.Timeout | null,
     };
-    this.active.set(request.agentId, active);
+    this.active.set(request.runId, active);
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -171,7 +198,13 @@ export class CodexRunner implements AgentRunner {
         const lines = stdout.split(/\r?\n/);
         stdout = lines.pop() ?? "";
         for (const line of lines) {
-          parseCodexEventLine(line, parsed);
+          parseCodexEventLine(
+            redactRuntimeText(
+              redactRuntimeOutput(line, request.mandateFlowCapability),
+              this.config.groqApiKey,
+            ),
+            parsed,
+          );
         }
       } else {
         stderr += chunk.toString("utf8");
@@ -196,7 +229,13 @@ export class CodexRunner implements AgentRunner {
         child.once("close", (code) => resolve(code ?? 1));
       });
       if (stdout.trim()) {
-        parseCodexEventLine(stdout.trim(), parsed);
+        parseCodexEventLine(
+          redactRuntimeText(
+            redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
+            this.config.groqApiKey,
+          ),
+          parsed,
+        );
       }
       if (active.cancelled) {
         throw new RunCancelledError();
@@ -208,10 +247,19 @@ export class CodexRunner implements AgentRunner {
         throw new Error("Codex output exceeded CODEX_MAX_OUTPUT_BYTES");
       }
       if (exitCode !== 0) {
-        const detail = parsed.errors.at(-1) ?? stderr.trim() ?? "No error detail";
+        const detail =
+          parsed.errors.at(-1) ??
+          redactRuntimeText(
+            redactRuntimeOutput(stderr.trim(), request.mandateFlowCapability),
+            this.config.groqApiKey,
+          ) ??
+          "No error detail";
         throw new Error("Codex exited with code " + exitCode + ": " + detail);
       }
-      const output = parsed.messages.at(-1)?.trim();
+      const output = redactRuntimeText(
+        redactRuntimeOutput(parsed.messages.at(-1)?.trim() ?? "", request.mandateFlowCapability),
+        this.config.groqApiKey,
+      );
       if (!output) {
         throw new Error("Codex completed without an agent message");
       }
@@ -219,11 +267,13 @@ export class CodexRunner implements AgentRunner {
         output,
         threadId: parsed.threadId,
         usage: parsed.usage,
+        runtimeInstanceId: "local-process-" + request.runId.slice(0, 12),
       };
     } finally {
       clearTimeout(timeout);
       if (active.forceKillTimer) clearTimeout(active.forceKillTimer);
-      this.active.delete(request.agentId);
+      this.active.delete(request.runId);
+      await proxy.close();
     }
   }
 
@@ -239,7 +289,10 @@ export class CodexRunner implements AgentRunner {
     }
   }
 
-  private childEnvironment(): NodeJS.ProcessEnv {
+  private childEnvironment(
+    mandateFlowCapability = "",
+    codexHomePath = this.config.codexHome,
+  ): NodeJS.ProcessEnv {
     const inheritedNames = [
       "PATH",
       "HOME",
@@ -255,13 +308,26 @@ export class CodexRunner implements AgentRunner {
       "TERM",
     ] as const;
     const environment: NodeJS.ProcessEnv = {
-      CODEX_HOME: this.config.codexHome,
-      ARK_API_KEY: this.config.arkApiKey,
+      CODEX_HOME: codexHomePath,
+      GROQ_API_KEY: this.config.groqApiKey,
       NO_COLOR: "1",
     };
+    if (mandateFlowCapability) {
+      environment.MANDATEFLOW_RUN_CAPABILITY = mandateFlowCapability;
+    }
     for (const name of inheritedNames) {
       if (process.env[name] !== undefined) environment[name] = process.env[name];
     }
     return environment;
   }
+}
+
+export function redactRuntimeOutput(value: string, capability: string): string {
+  const capabilityRedacted = capability
+    ? value.split(capability).join("[REDACTED_RUN_CAPABILITY]")
+    : value;
+  return capabilityRedacted.replace(
+    /\bref1_[A-Za-z0-9_-]{43}\b/g,
+    "[REDACTED_PROTECTED_REFERENCE]",
+  );
 }

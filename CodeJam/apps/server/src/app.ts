@@ -10,12 +10,16 @@ import type { AgentService } from "./agent-service.js";
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
-const createAgentBody = z.object({
+const mandateIdParams = z.object({ id: z.string().min(8).max(128) });
+const agentDetailsBody = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(),
   instructions: z.string().max(10_000).optional(),
 });
-const updateAgentBody = createAgentBody.partial().refine(
+const createAgentBody = agentDetailsBody.extend({
+  ownerPrincipal: z.enum(["user-a", "user-b"]).default("user-a"),
+});
+const updateAgentBody = agentDetailsBody.partial().refine(
   (value) => Object.keys(value).length > 0,
   "At least one field is required",
 );
@@ -66,6 +70,7 @@ export async function createApp(
   app.get("/api/health", async () => ({
     ok: true,
     service: "volc-agent-launchpad",
+    ...(await service.healthInfo()),
   }));
 
   app.get("/api/auth", async () => ({ required: config.authToken.length > 0 }));
@@ -116,6 +121,11 @@ export async function createApp(
     return { runs: service.getRuns(id) };
   });
 
+  app.get("/api/agents/:id/mandate", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return { mandate: await service.getMandateSummary(id) };
+  });
+
   app.post("/api/agents/:id/messages", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
     const body = messageBody.parse(request.body);
@@ -123,9 +133,29 @@ export async function createApp(
     return reply.code(202).send(result);
   });
 
+  app.post("/api/agents/:id/new-demo-workflow", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return { agent: await service.newDemoWorkflow(id) };
+  });
+
   app.get("/api/runs/:id", async (request) => {
     const { id } = runIdParams.parse(request.params);
     return { run: service.getRun(id) };
+  });
+
+  app.get("/api/runs/:id/evidence", async (request) => {
+    const { id } = runIdParams.parse(request.params);
+    return { evidence: await service.getRunEvidence(id) };
+  });
+
+  app.post("/api/runs/:id/retry", async (request, reply) => {
+    const { id } = runIdParams.parse(request.params);
+    return reply.code(202).send({ run: await service.retryRun(id) });
+  });
+
+  app.post("/api/mandates/:id/revoke", async (request) => {
+    const { id } = mandateIdParams.parse(request.params);
+    return service.revokeMandate(id);
   });
 
   if (config.nodeEnv === "production") {

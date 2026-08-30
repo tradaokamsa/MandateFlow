@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1080" viewBox="0 0 2000 1080" role="img" aria-labelledby="title desc">
   <title id="title">MandateFlow protected MCP request decision flow</title>
-  <desc id="desc">Every MCP initialize, list and call request is authenticated. An invalid capability receives a generic HTTP 401 with no normal policy receipt. Authenticated calls load an immutable Run grant and server-owned references, then pass static scope, reference-validity and provenance-flow checks. Allowed calls persist an ALLOW PENDING admission before a protected fixture is invoked, then persist outcome and derived lineage before returning. Authenticated denials return stage-specific MCP errors and never invoke the fixture.</desc>
+  <desc id="desc">Every MCP initialize, list and call request is authenticated. An invalid capability receives a generic HTTP 401 with no normal policy receipt. Authenticated calls load an immutable Run grant and server-owned references, then pass static scope, reference-validity and provenance-flow checks. Allowed calls run an embedded protected fixture inside a SQLite transaction and atomically commit the result, receipt, counters and derived lineage before returning. Authenticated denials return stage-specific MCP errors and never invoke the fixture.</desc>
   <defs>
     <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#2563eb"/></marker>
     <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#dc2626"/></marker>
@@ -60,7 +60,7 @@
   <text x="1335" y="210" class="node-title">Flow policy</text><text x="1335" y="233" class="node-sub">walk stored parent ancestry</text><text x="1335" y="254" class="node-sub">allowed for pinned purpose?</text><text x="1335" y="275" class="node-sub">deny-first rule set</text>
 
   <rect x="1465" y="180" width="165" height="120" rx="13" class="allow"/>
-  <text x="1547" y="210" class="node-title">Persist admission</text><text x="1547" y="234" class="node-sub">ALLOW · PENDING</text><text x="1547" y="255" class="node-sub">invoked = null</text><text x="1547" y="276" class="node-sub">before fixture call</text>
+  <text x="1547" y="210" class="node-title">Begin transaction</text><text x="1547" y="234" class="node-sub">decision = ALLOW</text><text x="1547" y="255" class="node-sub">no result disclosed</text><text x="1547" y="276" class="node-sub">before fixture call</text>
 
   <rect x="1710" y="180" width="220" height="120" rx="13" class="fixture"/>
   <text x="1820" y="212" class="node-title">Execute protected fixture</text><text x="1820" y="237" class="node-sub">Support · Payments · Cases · CRM</text><text x="1820" y="259" class="node-sub">trusted internal target mapping</text><text x="1820" y="280" class="node-sub">invoked only after admission</text>
@@ -97,7 +97,7 @@
   <!-- Allowed fixture result, outcome and lineage -->
   <path d="M1820 300V558H1650" class="green-edge"/>
   <rect x="1390" y="500" width="260" height="130" rx="13" class="allow"/>
-  <text x="1520" y="531" class="node-title">Persist result before return</text><text x="1520" y="555" class="node-sub">outcome = SUCCEEDED / FAILED</text><text x="1520" y="576" class="node-sub">mint opaque typed references</text><text x="1520" y="597" class="node-sub">parents + union classifications</text><text x="1520" y="618" class="node-sub">producing receipt + internal mapping</text>
+  <text x="1520" y="531" class="node-title">Commit result before return</text><text x="1520" y="555" class="node-sub">fixture + receipt + counter</text><text x="1520" y="576" class="node-sub">mint opaque typed references</text><text x="1520" y="597" class="node-sub">parents + inherited classifications</text><text x="1520" y="618" class="node-sub">producing receipt + internal mapping</text>
   <path d="M1390 565H1330V690" class="green-edge"/>
   <rect x="1110" y="690" width="240" height="100" rx="13" class="allow"/>
   <text x="1230" y="723" class="node-title">Return safe MCP result</text><text x="1230" y="748" class="node-sub">opaque typed references only</text><text x="1230" y="769" class="node-sub">or downstream failure result</text>

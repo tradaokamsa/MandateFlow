@@ -12,5 +12,5 @@ fi
 mkdir -p data workspaces codex-home
 
 echo "Next:"
-echo "  1. Fill ARK_API_KEY and ARK_MODEL in .env"
+echo "  1. Fill GROQ_API_KEY in .env; GROQ_MODEL is optional"
 echo "  2. Run: docker compose up --build"

@@ -1,19 +1,40 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AppConfig } from "./config.js";
-import { isArkConfigured } from "./config.js";
+import { isGroqConfigured, writeCodexConfig } from "./config.js";
 import { HttpError, RunCancelledError } from "./errors.js";
+import { containerName } from "./container-codex-runner.js";
+import {
+  MANDATE_PERMISSIONS,
+  type MandateFlowControl,
+} from "./mandateflow-client.js";
 import { JsonStore } from "./store.js";
+import { redactRuntimeText } from "./trace.js";
 import type {
   Agent,
   AgentRun,
   AgentRunner,
   CreateAgentInput,
+  MandateEvidence,
+  MandateSummary,
+  MandatePrepareRequest,
   Message,
   UpdateAgentInput,
 } from "./types.js";
-import { WorkspaceManager } from "./workspace.js";
+import {
+  CODEX_HOME_VERSION,
+  ensureAgentCodexHome,
+  WorkspaceManager,
+} from "./workspace.js";
 
 const now = () => new Date().toISOString();
+
+const RETRY_PROMPT =
+  "Retry only the previously denied crm.resolve_customer call using the exact prior " +
+  "Payment-derived Case reference already present in this thread. Do not call " +
+  "payments.list_failures or cases.lookup_subject again. If denied, stop and report " +
+  "the receipt ID.";
+
+class SecurityFinalizationError extends Error {}
 
 export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
@@ -24,17 +45,37 @@ export class AgentService {
     private readonly store: JsonStore,
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
+    private readonly mandateFlow: MandateFlowControl | null = null,
   ) {}
 
   async initialize(): Promise<void> {
     await this.store.initialize();
     await this.workspaces.initialize();
     await this.store.mutate((database) => {
+      for (const agent of database.agents) {
+        if (agent.ownerPrincipal !== "user-a" && agent.ownerPrincipal !== "user-b") {
+          agent.ownerPrincipal = "user-a";
+        }
+        if (!agent.agentPrincipal) agent.agentPrincipal = "agent:" + agent.id;
+        if (agent.codexHomeVersion !== CODEX_HOME_VERSION) {
+          agent.codexThreadId = null;
+          agent.codexHomeVersion = CODEX_HOME_VERSION;
+        }
+      }
       for (const run of database.runs) {
+        const runAgent = database.agents.find((agent) => agent.id === run.agentId);
+        if (runAgent) {
+          run.ownerPrincipal ??= runAgent.ownerPrincipal;
+          run.agentPrincipal ??= runAgent.agentPrincipal;
+        }
         if (run.status === "queued" || run.status === "running") {
           run.status = "cancelled";
           run.error = "Server restarted while this run was active";
           run.completedAt = now();
+          run.mandateStatus =
+            this.config.mandateFlowEnabled && run.policyContextId
+              ? "security-finalization-pending"
+              : "closed";
         }
       }
       for (const agent of database.agents) {
@@ -44,6 +85,18 @@ export class AgentService {
         }
       }
     });
+    await Promise.all(
+      this.store.snapshot().agents.map((agent) =>
+        ensureAgentCodexHome(this.config.codexHome, agent.id),
+      ),
+    );
+    if (
+      this.config.mandateFlowEnabled &&
+      this.mandateFlow &&
+      (await this.mandateFlow.ready())
+    ) {
+      await this.reconcilePendingFinalizations();
+    }
   }
 
   listAgents(): Agent[] {
@@ -54,23 +107,29 @@ export class AgentService {
 
   getAgent(id: string): Agent {
     const agent = this.store.snapshot().agents.find((item) => item.id === id);
-    if (!agent) {
-      throw new HttpError(404, "Agent not found");
-    }
+    if (!agent) throw new HttpError(404, "Agent not found");
     return agent;
   }
 
   async createAgent(input: CreateAgentInput): Promise<Agent> {
     const timestamp = now();
     const id = randomUUID();
+    const ownerPrincipal = input.ownerPrincipal ?? "user-a";
+    if (ownerPrincipal !== "user-a" && ownerPrincipal !== "user-b") {
+      throw new HttpError(400, "ownerPrincipal must be user-a or user-b");
+    }
     const agent: Agent = {
       id,
       name: input.name.trim(),
       description: input.description?.trim() ?? "",
       instructions: input.instructions?.trim() ?? "",
       status: "ready",
+      ownerPrincipal,
+      agentPrincipal: "agent:" + id,
+      codexHomeVersion: CODEX_HOME_VERSION,
       workspacePath: this.workspaces.workspacePath(id),
       codexThreadId: null,
+      activePolicyContextId: null,
       lastError: null,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -87,9 +146,7 @@ export class AgentService {
     }
     const updated = await this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === id);
-      if (!agent) {
-        throw new HttpError(404, "Agent not found");
-      }
+      if (!agent) throw new HttpError(404, "Agent not found");
       if (agent.status === "busy") {
         throw new HttpError(409, "Stop the active run before editing this Agent");
       }
@@ -136,9 +193,7 @@ export class AgentService {
 
   getRun(runId: string): AgentRun {
     const run = this.store.snapshot().runs.find((item) => item.id === runId);
-    if (!run) {
-      throw new HttpError(404, "Run not found");
-    }
+    if (!run) throw new HttpError(404, "Run not found");
     return run;
   }
 
@@ -150,15 +205,193 @@ export class AgentService {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
+  async getRunEvidence(runId: string): Promise<MandateEvidence> {
+    this.getRun(runId);
+    if (!this.config.mandateFlowEnabled || !this.mandateFlow) {
+      throw new HttpError(404, "MandateFlow evidence is not enabled");
+    }
+    return this.mandateFlow.evidence(runId);
+  }
+
+  async getMandateSummary(agentId: string): Promise<MandateSummary | null> {
+    const agent = this.getAgent(agentId);
+    const mandateId = this.store
+      .snapshot()
+      .runs.filter(
+        (run) => run.agentId === agentId && run.policyContextId === agent.activePolicyContextId,
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.mandateId;
+    if (!mandateId) return null;
+    if (!this.config.mandateFlowEnabled || !this.mandateFlow?.summary) {
+      return null;
+    }
+    return this.mandateFlow.summary(mandateId);
+  }
+
+  async revokeMandate(mandateId: string): Promise<{
+    mandate: MandateSummary;
+    agent: Agent;
+    run: AgentRun | null;
+  }> {
+    if (!this.config.mandateFlowEnabled || !this.mandateFlow?.revoke) {
+      throw new HttpError(404, "MandateFlow revocation is not enabled");
+    }
+    const snapshot = this.store.snapshot();
+    const associatedRun = snapshot.runs
+      .filter((candidate) => candidate.mandateId === mandateId || candidate.policyContextId === mandateId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+    if (!associatedRun) throw new HttpError(404, "Mandate not found");
+    const agent = this.getAgent(associatedRun.agentId);
+
+    // The sidecar transaction is the point of authority. Do this before asking
+    // a Runtime to stop so a failed sidecar cannot claim to have revoked it.
+    const result = await this.mandateFlow.revoke(mandateId, agent.ownerPrincipal);
+    const affectedRunIds = new Set(result.affectedRunIds);
+    const activeRun = this.store
+      .snapshot()
+      .runs.find(
+        (candidate) =>
+          affectedRunIds.has(candidate.id) &&
+          (candidate.status === "queued" || candidate.status === "running"),
+      );
+    if (activeRun) {
+      await this.cancelRevokedRun(agent.id, activeRun.id);
+    }
+    await this.store.mutate((database) => {
+      for (const candidate of database.runs) {
+        if (!affectedRunIds.has(candidate.id)) continue;
+        if (candidate.status === "queued" || candidate.status === "running") {
+          candidate.status = "cancelled";
+          candidate.error = "Mandate was revoked; the active Runtime was cancelled";
+          candidate.completedAt = now();
+        }
+        candidate.mandateStatus = "revoked";
+      }
+      const storedAgent = database.agents.find((candidate) => candidate.id === agent.id);
+      if (storedAgent && storedAgent.status === "busy") {
+        storedAgent.status = "ready";
+        storedAgent.updatedAt = now();
+      }
+    });
+    const updatedAgent = this.getAgent(agent.id);
+    const updatedRun = this.store
+      .snapshot()
+      .runs.filter((candidate) => candidate.agentId === agent.id && candidate.policyContextId === result.mandate.policyContextId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+    return { mandate: result.mandate, agent: updatedAgent, run: updatedRun };
+  }
+
   async sendMessage(
     agentId: string,
     prompt: string,
   ): Promise<{ run: AgentRun; message: Message }> {
-    if (!isArkConfigured(this.config)) {
+    const result = await this.createRun(agentId, prompt, null, true);
+    if (!result.message) throw new Error("Playground Run did not create its user message");
+    return { run: result.run, message: result.message };
+  }
+
+  async retryRun(runId: string): Promise<AgentRun> {
+    const original = this.getRun(runId);
+    if (original.status !== "completed" || !original.policyContextId) {
+      throw new HttpError(409, "Only a completed MandateFlow Run can be retried");
+    }
+    const agent = this.getAgent(original.agentId);
+    if (!agent.codexThreadId || agent.activePolicyContextId !== original.policyContextId) {
+      throw new HttpError(409, "Retry requires the durable Codex thread and original policy context");
+    }
+    if (!this.mandateFlow) {
+      throw new HttpError(503, "MandateFlow is unavailable");
+    }
+    const evidence = await this.mandateFlow.evidence(original.id);
+    const hasRetryableDenial = evidence.receipts.some(
+      (receipt) =>
+        receipt.runId === original.id &&
+        receipt.tool === "crm.resolve_customer" &&
+        receipt.staticScopeDecision === "ALLOW" &&
+        receipt.provenanceDecision === "DENY" &&
+        !receipt.downstreamInvoked,
+    );
+    if (!hasRetryableDenial) {
+      throw new HttpError(409, "Retry requires a completed Run with a provenance-denied CRM call");
+    }
+    const result = await this.createRun(agent.id, RETRY_PROMPT, original.id, false);
+    return result.run;
+  }
+
+  async healthInfo(): Promise<{
+    mandateFlowEnabled: boolean;
+    mandateFlowReady: boolean;
+  }> {
+    const mandateFlowReady =
+      this.config.mandateFlowEnabled && this.mandateFlow
+        ? await this.mandateFlow.ready()
+        : false;
+    return {
+      mandateFlowEnabled: this.config.mandateFlowEnabled,
+      mandateFlowReady,
+    };
+  }
+
+  async newDemoWorkflow(agentId: string): Promise<Agent> {
+    if (this.config.mandateFlowEnabled) {
+      await this.ensureMandateFlowReady();
+      await this.requireFinalizedAuthority(agentId);
+      await this.ensureMandateContextUsable(agentId);
+    }
+    return this.store.mutate((database) => {
+      const agent = database.agents.find((item) => item.id === agentId);
+      if (!agent) throw new HttpError(404, "Agent not found");
+      if (agent.status === "busy") {
+        throw new HttpError(409, "Stop the active Run before starting a new workflow");
+      }
+      agent.activePolicyContextId = null;
+      agent.codexThreadId = null;
+      agent.lastError = null;
+      if (agent.status === "error") agent.status = "ready";
+      agent.updatedAt = now();
+      return structuredClone(agent);
+    });
+  }
+
+  async systemInfo(): Promise<Record<string, unknown>> {
+    const mandateFlowHealth = await this.healthInfo();
+    return {
+      groqConfigured: isGroqConfigured(this.config),
+      groqBaseUrl: this.config.groqBaseUrl,
+      groqModel: this.config.groqModel || null,
+      codexAvailable: await this.runner.isAvailable(),
+      codexSandboxMode: this.config.codexSandboxMode,
+      runtimeProvider: this.config.runtimeProvider,
+      containerEngine:
+        this.config.runtimeProvider === "container"
+          ? this.config.containerEngine
+          : null,
+      runtime:
+        this.config.runtimeProvider === "container"
+          ? "Codex CLI in " + this.config.containerEngine + " Runtime"
+          : "Codex CLI in application container",
+      ...mandateFlowHealth,
+      mandateFlowPolicy: this.config.mandateFlowEnabled
+        ? "MIXED_OPERATIONS_BRIEF · mixed-operations-flow v1"
+        : null,
+    };
+  }
+
+  private async createRun(
+    agentId: string,
+    prompt: string,
+    retryOfRunId: string | null,
+    createUserMessage: boolean,
+  ): Promise<{ run: AgentRun; message: Message | null }> {
+    if (!isGroqConfigured(this.config)) {
       throw new HttpError(
         503,
-        "Ark is not configured. Set ARK_API_KEY and ARK_MODEL, then restart.",
+        "Groq is not configured. Set GROQ_API_KEY; GROQ_MODEL is optional, then restart.",
       );
+    }
+    if (this.config.mandateFlowEnabled) {
+      await this.ensureMandateFlowReady();
+      await this.requireFinalizedAuthority(agentId);
     }
     const timestamp = now();
     const runId = randomUUID();
@@ -172,29 +405,51 @@ export class AgentService {
       usage: null,
       startedAt: null,
       completedAt: null,
+      policyContextId: null,
+      runGrantId: null,
+      mandateId: null,
+      ownerPrincipal: null,
+      agentPrincipal: null,
+      retryOfRunId,
+      mandateStatus: "pending",
+      capabilityFingerprint: null,
+      grantFingerprint: null,
+      runtimeInstanceId: null,
       createdAt: timestamp,
     };
-    const message: Message = {
-      id: randomUUID(),
-      agentId,
-      runId,
-      role: "user",
-      content: prompt,
-      createdAt: timestamp,
-    };
+    const message: Message | null = createUserMessage
+      ? {
+          id: randomUUID(),
+          agentId,
+          runId,
+          role: "user",
+          content: prompt,
+          createdAt: timestamp,
+        }
+      : null;
     const agentAtStart = await this.store.mutate((database) => {
       const storedAgent = database.agents.find((item) => item.id === agentId);
-      if (!storedAgent) {
-        throw new HttpError(404, "Agent not found");
-      }
+      if (!storedAgent) throw new HttpError(404, "Agent not found");
       if (storedAgent.status === "stopped") {
         throw new HttpError(409, "Start the Agent before sending a message");
       }
       if (storedAgent.status === "busy") {
         throw new HttpError(409, "This Agent is already running");
       }
+      if (retryOfRunId) {
+        const original = database.runs.find((item) => item.id === retryOfRunId);
+        if (
+          !original ||
+          original.agentId !== agentId ||
+          original.status !== "completed" ||
+          !original.policyContextId ||
+          original.policyContextId !== storedAgent.activePolicyContextId
+        ) {
+          throw new HttpError(409, "Retry source is no longer eligible");
+        }
+      }
       database.runs.push(run);
-      database.messages.push(message);
+      if (message) database.messages.push(message);
       const snapshot = structuredClone(storedAgent);
       storedAgent.status = "busy";
       storedAgent.lastError = null;
@@ -213,58 +468,125 @@ export class AgentService {
     return { run, message };
   }
 
-  async systemInfo(): Promise<Record<string, unknown>> {
-    return {
-      arkConfigured: isArkConfigured(this.config),
-      arkBaseUrl: this.config.arkBaseUrl,
-      arkModel: this.config.arkModel || null,
-      codexAvailable: await this.runner.isAvailable(),
-      codexSandboxMode: this.config.codexSandboxMode,
-      runtimeProvider: this.config.runtimeProvider,
-      containerEngine:
-        this.config.runtimeProvider === "container"
-          ? this.config.containerEngine
-          : null,
-      runtime:
-        this.config.runtimeProvider === "container"
-          ? "Codex CLI in " + this.config.containerEngine + " Runtime"
-          : "Codex CLI in application container",
-    };
-  }
-
   private async executeRun(agentAtStart: Agent, run: AgentRun): Promise<void> {
-    await this.store.mutate((database) => {
-      const storedRun = database.runs.find((item) => item.id === run.id);
-      if (storedRun) {
-        storedRun.status = "running";
-        storedRun.startedAt = now();
-      }
-    });
+    let capability = "";
+    let mandatePrepared = false;
+    let mandateTerminal = false;
+    let securityFinalizationPending = false;
     try {
-      if (this.cancellationRequests.has(agentAtStart.id)) {
-        throw new RunCancelledError();
+      if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
+      const codexHomePath = await ensureAgentCodexHome(this.config.codexHome, agentAtStart.id);
+      await writeCodexConfig(this.config, codexHomePath);
+
+      if (this.config.mandateFlowEnabled) {
+        if (!this.mandateFlow) throw new HttpError(503, "MandateFlow is unavailable");
+        capability = createRunCapability();
+        const capabilitySha256 = createHash("sha256")
+          .update(capability, "utf8")
+          .digest("base64url");
+        const snapshot = this.store.snapshot();
+        const predecessor = snapshot.runs
+          .filter(
+            (candidate) =>
+              candidate.id !== run.id &&
+              candidate.agentId === run.agentId &&
+              candidate.status === "completed" &&
+              candidate.policyContextId === agentAtStart.activePolicyContextId,
+          )
+          .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+        const mode: MandatePrepareRequest["mode"] = run.retryOfRunId
+          ? "RETRY"
+          : agentAtStart.activePolicyContextId
+            ? "FOLLOW_UP"
+            : "NEW";
+        const prepared = await this.mandateFlow.prepare(run.id, {
+          agentId: agentAtStart.id,
+          ownerPrincipal: agentAtStart.ownerPrincipal,
+          runtimeInstanceId:
+            this.config.runtimeProvider === "container"
+              ? containerName(run.id, this.config.runtimeInstanceId)
+              : "local-process-" + run.id.slice(0, 12),
+          mode,
+          policyContextId: agentAtStart.activePolicyContextId,
+          predecessorRunId: predecessor?.id ?? null,
+          retryOfRunId: run.retryOfRunId,
+          mandateTemplateId: "morning-ops-v1",
+          requestedPermissions: MANDATE_PERMISSIONS,
+          capabilitySha256,
+        });
+        mandatePrepared = true;
+        await this.store.mutate((database) => {
+          const storedRun = database.runs.find((item) => item.id === run.id);
+          const agent = database.agents.find((item) => item.id === run.agentId);
+          if (!storedRun || !agent) return;
+          storedRun.policyContextId = prepared.policyContextId;
+          storedRun.runGrantId = prepared.runGrantId;
+          storedRun.mandateId = prepared.mandateId ?? null;
+          storedRun.ownerPrincipal = prepared.ownerPrincipal ?? agent.ownerPrincipal;
+          storedRun.agentPrincipal = prepared.agentPrincipal ?? agent.agentPrincipal;
+          storedRun.capabilityFingerprint = prepared.capabilityFingerprint;
+          storedRun.grantFingerprint = prepared.grantFingerprint;
+          agent.activePolicyContextId = prepared.policyContextId;
+        });
+        await this.mandateFlow.activate(run.id);
       }
+
+      await this.store.mutate((database) => {
+        const storedRun = database.runs.find((item) => item.id === run.id);
+        if (storedRun) {
+          storedRun.status = "running";
+          storedRun.mandateStatus = this.config.mandateFlowEnabled ? "active" : "closed";
+          storedRun.startedAt = now();
+        }
+      });
+
+      if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
       const result = await this.runner.run({
+        runId: run.id,
         agentId: agentAtStart.id,
         workspacePath: agentAtStart.workspacePath,
         prompt: run.prompt,
         threadId: agentAtStart.codexThreadId,
+        mandateFlowCapability: capability,
+        codexHomePath,
       });
+
+      if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
+
+      if (this.config.mandateFlowEnabled && this.mandateFlow) {
+        await this.store.mutate((database) => {
+          const storedRun = database.runs.find((item) => item.id === run.id);
+          if (storedRun) storedRun.mandateStatus = "finalizing";
+        });
+        try {
+          await this.finishMandate(run.id, "COMPLETED");
+          mandateTerminal = true;
+        } catch {
+          securityFinalizationPending = true;
+          throw new SecurityFinalizationError(
+            "Codex finished, but MandateFlow could not confirm capability invalidation",
+          );
+        }
+      }
+
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
         const agent = database.agents.find((item) => item.id === agentAtStart.id);
         if (!storedRun || !agent) return;
         storedRun.status = "completed";
-        storedRun.output = result.output;
+        const output = redactRuntimeText(result.output, this.config.groqApiKey);
+        storedRun.output = output;
         storedRun.usage = result.usage;
         storedRun.completedAt = completedAt;
+        storedRun.runtimeInstanceId = result.runtimeInstanceId;
+        storedRun.mandateStatus = "closed";
         database.messages.push({
           id: randomUUID(),
           agentId: agent.id,
           runId: run.id,
           role: "assistant",
-          content: result.output,
+          content: output,
           createdAt: completedAt,
         });
         agent.status = "ready";
@@ -274,8 +596,21 @@ export class AgentService {
       });
     } catch (error) {
       const completedAt = now();
-      const cancelled = error instanceof RunCancelledError;
-      const message = error instanceof Error ? error.message : String(error);
+      const cancelled =
+        error instanceof RunCancelledError || this.cancellationRequests.has(run.id);
+      let message = redactRuntimeText(
+        error instanceof Error ? error.message : String(error),
+        this.config.groqApiKey,
+      );
+      if (mandatePrepared && !mandateTerminal && !securityFinalizationPending) {
+        try {
+          await this.finishMandate(run.id, cancelled ? "CANCELLED" : "FAILED");
+          mandateTerminal = true;
+        } catch {
+          securityFinalizationPending = true;
+          message += "; capability invalidation is pending";
+        }
+      }
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
         const agent = database.agents.find((item) => item.id === agentAtStart.id);
@@ -283,24 +618,124 @@ export class AgentService {
           storedRun.status = cancelled ? "cancelled" : "failed";
           storedRun.error = message;
           storedRun.completedAt = completedAt;
+          storedRun.mandateStatus = securityFinalizationPending
+            ? "security-finalization-pending"
+            : "closed";
         }
         if (agent) {
-          if (agent.status !== "stopped") {
-            agent.status = cancelled ? "ready" : "error";
-          }
+          if (agent.status !== "stopped") agent.status = cancelled ? "ready" : "error";
           agent.lastError = cancelled ? null : message;
           agent.updatedAt = completedAt;
         }
       });
+    } finally {
+      capability = "";
+    }
+  }
+
+  private async finishMandate(
+    runId: string,
+    status: "COMPLETED" | "FAILED" | "CANCELLED" | "ABANDONED",
+  ): Promise<void> {
+    if (!this.mandateFlow) return;
+    let lastError: unknown;
+    for (const delay of [0, 100, 300]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        await this.mandateFlow.finish(runId, status);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  private async ensureMandateFlowReady(): Promise<void> {
+    if (!this.mandateFlow || !(await this.mandateFlow.ready())) {
+      throw new HttpError(503, "MandateFlow is unavailable; no secure Runtime was started");
+    }
+  }
+
+  private async ensureMandateContextUsable(agentId: string): Promise<void> {
+    const agent = this.getAgent(agentId);
+    if (!agent.activePolicyContextId || !this.mandateFlow?.summary) return;
+    const mandateId = this.store
+      .snapshot()
+      .runs.filter(
+        (run) => run.agentId === agentId && run.policyContextId === agent.activePolicyContextId,
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.mandateId;
+    if (!mandateId) return;
+    const summary = await this.mandateFlow.summary(mandateId);
+    if (summary.status === "REVOKED") {
+      throw new HttpError(
+        409,
+        "This mandate was revoked. Start a New secure workflow before sending another message",
+      );
+    }
+  }
+
+  private async requireFinalizedAuthority(agentId: string): Promise<void> {
+    await this.reconcilePendingFinalizations(agentId);
+    const pending = this.store
+      .snapshot()
+      .runs.some(
+        (run) =>
+          run.agentId === agentId &&
+          run.mandateStatus === "security-finalization-pending",
+      );
+    if (pending) {
+      throw new HttpError(
+        503,
+        "A prior Run capability is still pending terminalization; no new Runtime was started",
+      );
+    }
+  }
+
+  private async reconcilePendingFinalizations(agentId?: string): Promise<void> {
+    if (!this.mandateFlow) return;
+    const pendingRuns = this.store
+      .snapshot()
+      .runs.filter(
+        (run) =>
+          run.mandateStatus === "security-finalization-pending" &&
+          (!agentId || run.agentId === agentId),
+      );
+    for (const run of pendingRuns) {
+      const intendedStatus =
+        run.status === "cancelled"
+          ? "CANCELLED"
+          : run.error?.startsWith("Codex finished,")
+            ? "COMPLETED"
+            : "FAILED";
+      let terminal = false;
+      try {
+        await this.finishMandate(run.id, intendedStatus);
+        terminal = true;
+      } catch {
+        try {
+          const evidence = await this.mandateFlow.evidence(run.id);
+          terminal = !["PREPARED", "ACTIVE"].includes(evidence.runStatus);
+        } catch {
+          terminal = false;
+        }
+      }
+      if (terminal) {
+        await this.store.mutate((database) => {
+          const storedRun = database.runs.find((candidate) => candidate.id === run.id);
+          if (storedRun?.mandateStatus === "security-finalization-pending") {
+            storedRun.mandateStatus = "closed";
+          }
+        });
+      }
     }
   }
 
   private async setStatus(id: string, status: Agent["status"]): Promise<Agent> {
     return this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === id);
-      if (!agent) {
-        throw new HttpError(404, "Agent not found");
-      }
+      if (!agent) throw new HttpError(404, "Agent not found");
       if (status === "ready" && agent.status === "busy") {
         throw new HttpError(409, "Stop the active run before starting this Agent");
       }
@@ -311,16 +746,37 @@ export class AgentService {
     });
   }
 
-  private async cancelExecution(agentId: string): Promise<void> {
-    this.cancellationRequests.add(agentId);
+  private async cancelRevokedRun(agentId: string, runId: string): Promise<void> {
+    this.cancellationRequests.add(runId);
     try {
-      await this.runner.cancel(agentId);
+      await this.runner.cancel(runId);
       const execution = this.activeExecutions.get(agentId);
-      if (execution) {
-        await execution;
-      }
+      if (execution) await execution;
     } finally {
-      this.cancellationRequests.delete(agentId);
+      this.cancellationRequests.delete(runId);
     }
   }
+
+  private async cancelExecution(agentId: string): Promise<void> {
+    const activeRun = this.store
+      .snapshot()
+      .runs.find(
+        (run) =>
+          run.agentId === agentId &&
+          (run.status === "queued" || run.status === "running"),
+      );
+    if (!activeRun) return;
+    this.cancellationRequests.add(activeRun.id);
+    try {
+      await this.runner.cancel(activeRun.id);
+      const execution = this.activeExecutions.get(agentId);
+      if (execution) await execution;
+    } finally {
+      this.cancellationRequests.delete(activeRun.id);
+    }
+  }
+}
+
+function createRunCapability(): string {
+  return "mfr1_" + randomBytes(32).toString("base64url");
 }

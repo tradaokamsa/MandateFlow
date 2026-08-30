@@ -59,8 +59,8 @@ variable "repository_ref" {
   default     = "main"
 }
 
-variable "ark_api_key" {
-  description = "Volcengine Ark API key. Supplied through TF_VAR_ark_api_key."
+variable "groq_api_key" {
+  description = "Groq API key. Supplied through TF_VAR_groq_api_key."
   type        = string
   sensitive   = true
 }
@@ -75,13 +75,14 @@ variable "app_auth_token" {
   }
 }
 
-variable "ark_model" {
-  description = "Ark endpoint/model ID supporting the Responses API."
+variable "groq_model" {
+  description = "Groq model supporting the Responses API."
   type        = string
+  default     = "openai/gpt-oss-120b"
 }
 
-variable "ark_base_url" {
-  description = "Ark OpenAI-compatible API base URL."
+variable "groq_base_url" {
+  description = "Groq OpenAI-compatible API base URL."
   type        = string
-  default     = "https://ark.cn-beijing.volces.com/api/v3"
+  default     = "https://api.groq.com/openai/v1"
 }
