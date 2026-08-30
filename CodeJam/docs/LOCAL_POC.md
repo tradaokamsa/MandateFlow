@@ -28,6 +28,10 @@ GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
 
+Fixture mode is proof-only. It is the fastest way to rehearse the secure
+MandateFlow evidence flow without model credentials; use the `container`
+profile when the Agent must inspect or change workspace code.
+
 Open <http://localhost:3000> and unlock with `APP_AUTH_TOKEN`. Press `Ctrl+C` to
 stop the server and remove this instance's remaining Runtime containers,
 MandateFlow sidecar, and private network.

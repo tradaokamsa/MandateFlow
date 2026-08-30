@@ -623,6 +623,8 @@ export default function App() {
       (system.runtimeProvider === "fixture" || system.groqConfigured) &&
       (!system.mandateFlowEnabled || system.mandateFlowReady),
   );
+  const isFixtureRuntime = system?.runtimeProvider === "fixture";
+  const visibleStarterPrompts = isFixtureRuntime ? starterPrompts.slice(0, 1) : starterPrompts;
   const latestProgress = activeRun?.progress.at(-1);
 
   return (
@@ -868,6 +870,13 @@ export default function App() {
                 </div>
               </div>
 
+              {isFixtureRuntime && (
+                <div className="fixture-notice" role="status">
+                  <strong>Proof-only mode</strong>
+                  <span>This credential-free profile runs the deterministic MandateFlow proof. Connect a Codex Runtime to build code with an Agent.</span>
+                </div>
+              )}
+
               <ProofPanel
                 evidence={evidence}
                 activeRun={activeRun}
@@ -1011,11 +1020,12 @@ export default function App() {
                     </div>
                     <h3>What should {selected.name} build?</h3>
                     <p>
-                      The Agent can inspect files, write code, run commands, and continue the
-                      same Codex session across messages.
+                      {isFixtureRuntime
+                        ? "Run the secure MandateFlow proof to inspect policy decisions and redacted evidence."
+                        : "The Agent can inspect files, write code, run commands, and continue the same Codex session across messages."}
                     </p>
                     <div className="prompt-grid">
-                      {starterPrompts.map((item) => (
+                      {visibleStarterPrompts.map((item) => (
                         <button key={item} onClick={() => setPrompt(item)}>
                           <span>↗</span>
                           {item}
@@ -1088,11 +1098,14 @@ export default function App() {
                     }
                   }}
                   placeholder={
-                    selected.status === "stopped"
+                    isFixtureRuntime
+                      ? "Proof-only mode: use Run MandateFlow proof"
+                      : selected.status === "stopped"
                       ? "Start this Agent to continue…"
                       : "Describe what you want the Agent to do…"
                   }
                   disabled={
+                    isFixtureRuntime ||
                     selected.status === "stopped" ||
                     selected.status === "busy" ||
                     revokePending ||
@@ -1110,6 +1123,7 @@ export default function App() {
                     className="send-button"
                     disabled={
                       !prompt.trim() ||
+                      isFixtureRuntime ||
                       selected.status === "stopped" ||
                       selected.status === "busy" ||
                       revokePending ||

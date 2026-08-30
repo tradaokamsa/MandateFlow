@@ -90,9 +90,12 @@ context while the new policy context starts cleanly.
 
 5. **P1 — Fixture and live behavior need different expectations.** The Runtime
    card now remains the source of truth for whether the current profile is a
-   deterministic fixture or Codex-backed Docker Runtime. This audit exercised
+   deterministic fixture or Codex-backed Docker Runtime. In proof-only mode,
+   the UI now says exactly that and disables the misleading coding composer
+   ([captured state](evidence/10-proof-only-mode.jpeg)). This audit exercised
    the fixture profile because no usable Groq credential was available for a
-   live model Run; the Codex event mapping is covered by parser tests.
+   live model Run; the server also rejects non-proof prompts in fixture mode,
+   and the Codex event mapping is covered by parser tests.
 
 ## Accessibility and evidence limits
 

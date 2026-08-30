@@ -143,7 +143,13 @@ describe("Agent lifecycle", () => {
     });
 
     const agent = await service.createAgent({ name: "Fixture Agent" });
-    const { run } = await service.sendMessage(agent.id, "run fixture proof");
+    await expect(service.sendMessage(agent.id, "write a TypeScript CLI")).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "Run the MandateFlow verification workflow.",
+    );
     await expect.poll(() => service.getRun(run.id).status).toBe("completed");
   });
 
@@ -505,6 +511,28 @@ describe("MandateFlow lifecycle", () => {
     expect(events.indexOf("cancel")).toBeGreaterThan(events.indexOf("revoked"));
     await expect.poll(() => service.getRun(run.id).status).toBe("cancelled");
     expect(service.getAgent(agent.id).status).toBe("ready");
+  });
+
+  it("keeps a Runtime cancel rejection from breaking the stop flow", async () => {
+    let rejectRun!: (error: unknown) => void;
+    const runner: AgentRunner = {
+      run: async () =>
+        new Promise<RunnerResult>((_resolve, reject) => {
+          rejectRun = reject;
+        }),
+      cancel: async () => {
+        rejectRun(new RunCancelledError());
+        throw new Error("Runtime cancel endpoint failed");
+      },
+      isAvailable: async () => true,
+    };
+    const service = await makeService(runner);
+    const agent = await service.createAgent({ name: "Cancel Failure Agent" });
+    const { run } = await service.sendMessage(agent.id, "hold open");
+    await expect.poll(() => service.getRun(run.id).status).toBe("running");
+
+    await expect(service.stopAgent(agent.id)).resolves.toMatchObject({ status: "stopped" });
+    await expect.poll(() => service.getRun(run.id).status).toBe("cancelled");
   });
 
   it("resets a revoked workflow into fresh authority that can start again", async () => {
