@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { api, ApiError, setAuthToken } from "./api";
 import type {
   Agent,
@@ -733,118 +734,167 @@ export default function App() {
                 </div>
               </div>
 
-              {system?.mandateFlowEnabled && mandate && (
-                <section className="mandate-summary" aria-labelledby="mandate-summary-title">
-                  <div className="mandate-summary-heading">
-                    <div>
-                      <span className="eyebrow">Trusted mandate</span>
-                      <h3 id="mandate-summary-title">Mandate Summary</h3>
-                    </div>
-                    <span className={"mandate-state mandate-state-" + mandate.status.toLowerCase()}>
-                      {mandate.status}
-                    </span>
-                  </div>
-                  <div className="mandate-summary-grid">
-                    <div><span>Purpose</span><strong>{mandate.purposeId}</strong></div>
-                    <div><span>Owner principal</span><strong>{mandate.ownerPrincipal}</strong></div>
-                    <div title={mandate.agentPrincipal}><span>Agent principal</span><strong>{shortId(mandate.agentPrincipal)}</strong></div>
-                    <div title={mandate.policyContextId}><span>Policy context</span><strong>{shortId(mandate.policyContextId)}</strong></div>
-                    <div title={mandate.mandateId}><span>Mandate ID</span><strong>{mandate.mandateFingerprint}</strong></div>
-                    <div><span>Issued</span><strong>{formatDateTime(mandate.issuedAt)}</strong></div>
-                    <div><span>Expires</span><strong>{formatDateTime(mandate.expiresAt)}</strong></div>
-                    <div className="mandate-tools"><span>Granted tools</span><strong>{mandate.grantedPermissions.map((permission) => permission.tool).join(" · ")}</strong></div>
-                  </div>
-                  {mandate.status !== "ACTIVE" ? (
-                    <div className="mandate-revoked-note" role="status">
-                      {mandate.status === "REVOKED"
-                        ? mandate.revocationReason ?? "This mandate is revoked."
-                        : "This mandate is closed. Start a New secure workflow for fresh authority."}
-                      {mandate.revokedAt ? " · " + formatDateTime(mandate.revokedAt) : ""}
-                    </div>
-                  ) : (
-                    <button
-                      className="button button-danger revoke-button"
-                      ref={revokeTrigger}
-                      onClick={() => setShowRevokeConfirm(true)}
-                      disabled={revokePending}
-                    >
-                      {revokePending ? <><Spinner /> Revoking…</> : "Revoke mandate"}
-                    </button>
-                  )}
-                  {revokeNotice && <div className="mandate-status-message" role="status">{revokeNotice}</div>}
-                </section>
-              )}
-
               {system?.mandateFlowEnabled && (
-                <section className="mandate-evidence" aria-live="polite">
-                  <div className="mandate-heading">
-                    <div>
-                      <span className="eyebrow">Trusted decision journal</span>
-                      <strong>
-                        {evidence
-                          ? "Provenance policy evidence"
-                          : activeRun && ["queued", "running"].includes(activeRun.status)
-                            ? "Collecting pre-execution decisions…"
-                            : "Start the verification workflow to produce evidence"}
-                      </strong>
+                <div className="playground-context">
+                  {mandate && (
+                    <section className="mandate-summary" aria-labelledby="mandate-summary-title">
+                      <div className="mandate-summary-heading">
+                        <div>
+                          <span className="eyebrow">Trusted mandate</span>
+                          <h3 id="mandate-summary-title">Mandate Summary</h3>
+                        </div>
+                        <span
+                          className={
+                            "mandate-state mandate-state-" + mandate.status.toLowerCase()
+                          }
+                        >
+                          {mandate.status}
+                        </span>
+                      </div>
+                      <div className="mandate-summary-grid">
+                        <div>
+                          <span>Purpose</span>
+                          <strong>{mandate.purposeId}</strong>
+                        </div>
+                        <div>
+                          <span>Owner principal</span>
+                          <strong>{mandate.ownerPrincipal}</strong>
+                        </div>
+                        <div title={mandate.agentPrincipal}>
+                          <span>Agent principal</span>
+                          <strong>{shortId(mandate.agentPrincipal)}</strong>
+                        </div>
+                        <div title={mandate.policyContextId}>
+                          <span>Policy context</span>
+                          <strong>{shortId(mandate.policyContextId)}</strong>
+                        </div>
+                        <div title={mandate.mandateId}>
+                          <span>Mandate ID</span>
+                          <strong>{mandate.mandateFingerprint}</strong>
+                        </div>
+                        <div>
+                          <span>Issued</span>
+                          <strong>{formatDateTime(mandate.issuedAt)}</strong>
+                        </div>
+                        <div>
+                          <span>Expires</span>
+                          <strong>{formatDateTime(mandate.expiresAt)}</strong>
+                        </div>
+                        <div className="mandate-tools">
+                          <span>Granted tools</span>
+                          <strong>
+                            {mandate.grantedPermissions
+                              .map((permission) => permission.tool)
+                              .join(" · ")}
+                          </strong>
+                        </div>
+                      </div>
+                      {mandate.status !== "ACTIVE" ? (
+                        <div className="mandate-revoked-note" role="status">
+                          {mandate.status === "REVOKED"
+                            ? mandate.revocationReason ?? "This mandate is revoked."
+                            : "This mandate is closed. Start a New secure workflow for fresh authority."}
+                          {mandate.revokedAt
+                            ? " · " + formatDateTime(mandate.revokedAt)
+                            : ""}
+                        </div>
+                      ) : (
+                        <button
+                          className="button button-danger revoke-button"
+                          ref={revokeTrigger}
+                          onClick={() => setShowRevokeConfirm(true)}
+                          disabled={revokePending}
+                        >
+                          {revokePending ? (
+                            <>
+                              <Spinner /> Revoking…
+                            </>
+                          ) : (
+                            "Revoke mandate"
+                          )}
+                        </button>
+                      )}
+                      {revokeNotice && (
+                        <div className="mandate-status-message" role="status">
+                          {revokeNotice}
+                        </div>
+                      )}
+                    </section>
+                  )}
+
+                  <section className="mandate-evidence" aria-live="polite">
+                    <div className="mandate-heading">
+                      <div>
+                        <span className="eyebrow">Trusted decision journal</span>
+                        <strong>
+                          {evidence
+                            ? "Provenance policy evidence"
+                            : activeRun && ["queued", "running"].includes(activeRun.status)
+                              ? "Collecting pre-execution decisions…"
+                              : "Start the verification workflow to produce evidence"}
+                        </strong>
+                      </div>
+                      {evidence && (
+                        <div className="mandate-facts">
+                          <span title={evidence.policyContextId}>
+                            context {shortId(evidence.policyContextId)}
+                          </span>
+                          <span>{evidence.grantFingerprint}</span>
+                          <span>{evidence.capabilityFingerprint}</span>
+                          <span className="counter-chip">CRM calls {evidence.crmCounter}</span>
+                        </div>
+                      )}
                     </div>
                     {evidence && (
-                      <div className="mandate-facts">
-                        <span title={evidence.policyContextId}>
-                          context {shortId(evidence.policyContextId)}
-                        </span>
-                        <span>{evidence.grantFingerprint}</span>
-                        <span>{evidence.capabilityFingerprint}</span>
-                        <span className="counter-chip">CRM calls {evidence.crmCounter}</span>
-                      </div>
-                    )}
-                  </div>
-                  {evidence && (
-                    <>
-                      <div className="mandate-continuity">
-                        <span>{evidence.purposeId}</span>
-                        <span>{evidence.policyId} v{evidence.policyVersion}</span>
-                        <span>runtime {shortId(evidence.runtimeInstanceId)}</span>
-                        {evidence.retryOfRunId && (
-                          <span className="retry-chip">
-                            retry of {shortId(evidence.retryOfRunId)} · same context
+                      <>
+                        <div className="mandate-continuity">
+                          <span>{evidence.purposeId}</span>
+                          <span>
+                            {evidence.policyId} v{evidence.policyVersion}
                           </span>
-                        )}
-                      </div>
-                      <div className="receipt-timeline">
-                        {evidence.receipts.slice(-8).map((receipt) => (
-                          <article
-                            className={
-                              "receipt-card receipt-" + receipt.decision.toLowerCase()
-                            }
-                            key={receipt.id}
-                          >
-                            <div className="receipt-title">
-                              <strong>{receipt.tool}</strong>
-                              <span>{receipt.decision}</span>
-                            </div>
-                            <div className="receipt-decisions">
-                              <span>scope {receipt.staticScopeDecision}</span>
-                              <span>flow {receipt.provenanceDecision}</span>
-                              <span>{receipt.outcome}</span>
-                            </div>
-                            <p>{receipt.reason}</p>
-                            {receipt.tool === "crm.resolve_customer" && (
-                              <small>
-                                CRM counter {receipt.counterBefore} → {receipt.counterAfter} · downstream {receipt.downstreamInvoked ? "invoked" : "not invoked"}
-                              </small>
-                            )}
-                            {receipt.causedByReceiptIds.length > 0 && (
-                              <small>
-                                caused by {receipt.causedByReceiptIds.map(shortId).join(" → ")}
-                              </small>
-                            )}
-                          </article>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </section>
+                          <span>runtime {shortId(evidence.runtimeInstanceId)}</span>
+                          {evidence.retryOfRunId && (
+                            <span className="retry-chip">
+                              retry of {shortId(evidence.retryOfRunId)} · same context
+                            </span>
+                          )}
+                        </div>
+                        <div className="receipt-timeline">
+                          {evidence.receipts.slice(-8).map((receipt) => (
+                            <article
+                              className={
+                                "receipt-card receipt-" + receipt.decision.toLowerCase()
+                              }
+                              key={receipt.id}
+                            >
+                              <div className="receipt-title">
+                                <strong>{receipt.tool}</strong>
+                                <span>{receipt.decision}</span>
+                              </div>
+                              <div className="receipt-decisions">
+                                <span>scope {receipt.staticScopeDecision}</span>
+                                <span>flow {receipt.provenanceDecision}</span>
+                                <span>{receipt.outcome}</span>
+                              </div>
+                              <p>{receipt.reason}</p>
+                              {receipt.tool === "crm.resolve_customer" && (
+                                <small>
+                                  CRM counter {receipt.counterBefore} → {receipt.counterAfter} ·
+                                  downstream {receipt.downstreamInvoked ? "invoked" : "not invoked"}
+                                </small>
+                              )}
+                              {receipt.causedByReceiptIds.length > 0 && (
+                                <small>
+                                  caused by {receipt.causedByReceiptIds.map(shortId).join(" → ")}
+                                </small>
+                              )}
+                            </article>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </section>
+                </div>
               )}
 
               <div className="messages">
@@ -874,7 +924,13 @@ export default function App() {
                         <strong>{message.role === "user" ? "You" : selected.name}</strong>
                         <span>{formatTime(message.createdAt)}</span>
                       </div>
-                      <div className="message-body">{message.content}</div>
+                      <div className="message-body">
+                        {message.role === "assistant" ? (
+                          <ReactMarkdown skipHtml>{message.content}</ReactMarkdown>
+                        ) : (
+                          message.content
+                        )}
+                      </div>
                     </article>
                   ))
                 )}
