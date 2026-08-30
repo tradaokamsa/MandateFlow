@@ -25,6 +25,8 @@ func NewControlHandler(service *mandateflow.Service, token string) http.Handler 
 	handler.mux.HandleFunc("POST /control/v1/runs/{runId}/activate", handler.activate)
 	handler.mux.HandleFunc("POST /control/v1/runs/{runId}/finish", handler.finish)
 	handler.mux.HandleFunc("GET /control/v1/runs/{runId}/evidence", handler.evidence)
+	handler.mux.HandleFunc("GET /control/v1/mandates/{mandateId}", handler.mandate)
+	handler.mux.HandleFunc("POST /control/v1/mandates/{mandateId}/revoke", handler.revoke)
 	return handler
 }
 
@@ -94,6 +96,33 @@ func (h *ControlHandler) evidence(response http.ResponseWriter, request *http.Re
 	writeJSON(response, http.StatusOK, result)
 }
 
+func (h *ControlHandler) mandate(response http.ResponseWriter, request *http.Request) {
+	result, err := h.service.MandateSummary(request.Context(), request.PathValue("mandateId"))
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (h *ControlHandler) revoke(response http.ResponseWriter, request *http.Request) {
+	var body struct {
+		ActorPrincipal string `json:"actorPrincipal"`
+	}
+	if request.Body != nil && request.Body != http.NoBody {
+		if err := decodeStrict(response, request, &body); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+			return
+		}
+	}
+	result, err := h.service.RevokeMandate(request.Context(), request.PathValue("mandateId"), body.ActorPrincipal)
+	if err != nil {
+		writeServiceError(response, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
 func decodeStrict(response http.ResponseWriter, request *http.Request, target any) error {
 	request.Body = http.MaxBytesReader(response, request.Body, 64*1024)
 	decoder := json.NewDecoder(request.Body)
@@ -132,6 +161,8 @@ func writeServiceError(response http.ResponseWriter, err error) {
 			status = http.StatusNotFound
 		case mandateflow.CodeConflict:
 			status = http.StatusConflict
+		case mandateflow.CodeOwnershipDenied:
+			status = http.StatusForbidden
 		default:
 			status = http.StatusBadRequest
 		}

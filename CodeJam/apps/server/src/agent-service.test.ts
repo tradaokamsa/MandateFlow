@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentService } from "./agent-service.js";
 import { loadConfig } from "./config.js";
+import { RunCancelledError } from "./errors.js";
 import type { MandateFlowControl } from "./mandateflow-client.js";
 import { JsonStore } from "./store.js";
 import type {
   AgentRunner,
   MandateEvidence,
+  MandateSummary,
   MandatePrepareRequest,
   MandatePrepareResult,
   RunnerRequest,
@@ -183,6 +185,7 @@ class FakeMandateFlow implements MandateFlowControl {
   failFinish = false;
   hasRetryableDenial = true;
   evidenceRunStatus = "COMPLETED";
+  revoked = false;
 
   async ready(): Promise<boolean> {
     this.events.push("ready");
@@ -200,6 +203,10 @@ class FakeMandateFlow implements MandateFlowControl {
       policyContextId: request.mode === "NEW" ? "ctx-1" : (request.policyContextId ?? "ctx-1"),
       grantFingerprint: "grant:12345678",
       capabilityFingerprint: "cap:12345678",
+      mandateId: "mnd-1",
+      ownerPrincipal: request.ownerPrincipal,
+      agentPrincipal: "agent:" + request.agentId,
+      issuedAt: new Date().toISOString(),
       status: "PREPARED",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       grantedPermissions: request.requestedPermissions,
@@ -257,6 +264,32 @@ class FakeMandateFlow implements MandateFlowControl {
           policyVersion: 1,
         },
       ] : [],
+    };
+  }
+
+  async summary(): Promise<MandateSummary> {
+    return {
+      mandateId: "mnd-1",
+      status: this.revoked ? "REVOKED" : "ACTIVE",
+      ownerPrincipal: "user-a",
+      agentPrincipal: "agent:secure",
+      policyContextId: "ctx-1",
+      purposeId: "MIXED_OPERATIONS_BRIEF",
+      policyId: "mixed-operations-flow",
+      policyVersion: 1,
+      grantedPermissions: [],
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      mandateFingerprint: "mandate:12345678",
+    };
+  }
+
+  async revoke(): Promise<{ mandate: MandateSummary; affectedRunIds: string[] }> {
+    this.events.push("revoke");
+    this.revoked = true;
+    return {
+      mandate: await this.summary(),
+      affectedRunIds: this.prepared.map((item) => item.runId),
     };
   }
 }
@@ -393,5 +426,41 @@ describe("MandateFlow lifecycle", () => {
     const recovered = await service.sendMessage(agent.id, "continue after reconciliation");
     await expect.poll(() => service.getRun(recovered.run.id).status).toBe("completed");
     expect(service.getRun(run.id).mandateStatus).toBe("closed");
+  });
+
+  it("persists revocation before cancelling an active Runtime", async () => {
+    const events: string[] = [];
+    let rejectRun!: (error: unknown) => void;
+    const runner: AgentRunner = {
+      run: async () =>
+        new Promise<RunnerResult>((_resolve, reject) => {
+          rejectRun = reject;
+          events.push("run");
+        }),
+      cancel: async () => {
+        events.push("cancel");
+        rejectRun(new RunCancelledError());
+        return true;
+      },
+      isAvailable: async () => true,
+    };
+    const mandateFlow = new FakeMandateFlow();
+    const originalRevoke = mandateFlow.revoke!.bind(mandateFlow);
+    mandateFlow.revoke = async (...args) => {
+      const result = await originalRevoke(...args);
+      events.push("revoked");
+      return result;
+    };
+    const service = await makeService(runner, mandateFlow);
+    const agent = await service.createAgent({ name: "Revoke Agent" });
+    const { run } = await service.sendMessage(agent.id, "hold open");
+    await expect.poll(() => service.getRun(run.id).status).toBe("running");
+
+    const revoked = await service.revokeMandate("mnd-1");
+    expect(revoked.mandate.status).toBe("REVOKED");
+    expect(events.indexOf("revoked")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("cancel")).toBeGreaterThan(events.indexOf("revoked"));
+    await expect.poll(() => service.getRun(run.id).status).toBe("cancelled");
+    expect(service.getAgent(agent.id).status).toBe("ready");
   });
 });

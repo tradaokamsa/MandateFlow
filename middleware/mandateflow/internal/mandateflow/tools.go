@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -35,6 +36,12 @@ func (s *Service) ExecuteTool(
 	}
 	policyContext, err := loadContext(ctx, tx, run.ContextID)
 	if err != nil || policyContext.State != "ACTIVE" || !now.Before(policyContext.ExpiresAt) {
+		return ToolResult{}, serviceError(CodeInvalidToken, "Run authority is no longer active")
+	}
+	if (principal.AgentID != "" && principal.AgentID != run.AgentID) ||
+		(principal.AgentPrincipal != "" && principal.AgentPrincipal != policyContext.AgentPrincipal) ||
+		(principal.OwnerPrincipal != "" && principal.OwnerPrincipal != policyContext.OwnerPrincipal) ||
+		(principal.MandateID != "" && principal.MandateID != policyContext.MandateID) {
 		return ToolResult{}, serviceError(CodeInvalidToken, "Run authority is no longer active")
 	}
 	var permissions []Permission
@@ -105,6 +112,24 @@ func (s *Service) ExecuteTool(
 		}
 	}
 
+	if !s.ownedFixture(ctx, tx, policyContext, spec, input) {
+		counter, err := fixtureCounter(ctx, tx, run.ContextID, toolName)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		result, err := s.persistDenial(
+			ctx, tx, run, spec, nil, string(CodeOwnershipDenied),
+			"Protected resource access denied", causedBy, aliases, counter,
+		)
+		if err != nil {
+			return ToolResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return ToolResult{}, fmt.Errorf("commit ownership denial: %w", err)
+		}
+		return result, nil
+	}
+
 	result, err := s.executeAllowed(ctx, tx, run, policyContext, spec, input, causedBy, aliases)
 	if err != nil {
 		return ToolResult{}, err
@@ -146,24 +171,36 @@ func (s *Service) executeAllowed(
 	var newPrivateTarget string
 	var newLabels []string
 	var parentDigest []byte
+	var fixtureResourceID string
 
 	switch spec.Tool {
 	case "support.list_tickets":
+		fixture, fixtureErr := loadFixtureResource(ctx, tx, spec.Tool, spec.OutputKind, policyContext.OwnerPrincipal)
+		if fixtureErr != nil {
+			return ToolResult{}, fmt.Errorf("load Support fixture: %w", fixtureErr)
+		}
 		newReference, err = opaqueID("ref1", 32)
 		newReferenceKind = spec.OutputKind
-		newPrivateTarget = "support:customer-001"
+		newPrivateTarget = fixture.PrivateTarget
+		fixtureResourceID = fixture.ID
 		newLabels = []string{spec.AddedLabel}
 		redactedResult = "Returned one open Support ticket and an opaque customer-subject reference"
 	case "payments.list_failures":
+		fixture, fixtureErr := loadFixtureResource(ctx, tx, spec.Tool, spec.OutputKind, policyContext.OwnerPrincipal)
+		if fixtureErr != nil {
+			return ToolResult{}, fmt.Errorf("load Payment fixture: %w", fixtureErr)
+		}
 		newReference, err = opaqueID("ref1", 32)
 		newReferenceKind = spec.OutputKind
-		newPrivateTarget = "payment:account-777"
+		newPrivateTarget = fixture.PrivateTarget
+		fixtureResourceID = fixture.ID
 		newLabels = []string{spec.AddedLabel}
 		redactedResult = "Returned aggregate-only Payment failure data and an opaque customer-subject reference"
 	case "cases.lookup_subject":
 		newReference, err = opaqueID("ref1", 32)
 		newReferenceKind = spec.OutputKind
 		newPrivateTarget = "case:" + input.PrivateTargetID
+		fixtureResourceID = input.FixtureResourceID.String
 		newLabels = append([]string(nil), input.EffectiveLabels...)
 		parentDigest = input.Digest
 		redactedResult = "Derived an opaque operations-case reference with inherited provenance"
@@ -174,13 +211,27 @@ UPDATE fixture_counters SET value = ? WHERE context_id = ? AND tool = ?`,
 			counterAfter, run.ContextID, spec.Tool); err != nil {
 			return ToolResult{}, fmt.Errorf("increment CRM counter: %w", err)
 		}
+		customerID := "customer-001"
+		if input != nil && input.FixtureResourceID.Valid {
+			fixture, fixtureErr := loadFixtureResourceByID(ctx, tx, input.FixtureResourceID.String)
+			if fixtureErr != nil || fixture.OwnerPrincipal != policyContext.OwnerPrincipal {
+				return ToolResult{}, serviceError(CodeOwnershipDenied, "Protected resource access denied")
+			}
+			customerID = strings.TrimPrefix(fixture.PrivateTarget, "support:")
+			if customerID == "" || customerID == fixture.PrivateTarget {
+				return ToolResult{}, fmt.Errorf("invalid Support fixture target")
+			}
+		}
 		result.Customer = &CustomerResult{
 			DisplayName:    "Demo Support Customer",
-			ContactChannel: "internal-crm://support-follow-up/customer-001",
+			ContactChannel: "internal-crm://support-follow-up/" + customerID,
 		}
 		result.Message = "CRM resolution was allowed for the Support-derived Case reference"
 		redactedResult = "CRM returned an authorized Support follow-up destination"
 	case "payments.aggregate_failures":
+		if _, fixtureErr := loadFixtureResource(ctx, tx, spec.Tool, spec.ResourceKind, policyContext.OwnerPrincipal); fixtureErr != nil {
+			return ToolResult{}, fmt.Errorf("load Payment aggregate fixture: %w", fixtureErr)
+		}
 		result.Aggregate = &AggregateResult{FailureCount: 3, Summary: "3 failed payments across 2 retryable categories"}
 		result.Message = "Payment failures were returned only in aggregate"
 		redactedResult = "Returned a Payment failure aggregate without customer identifiers"
@@ -212,10 +263,11 @@ UPDATE fixture_counters SET value = ? WHERE context_id = ? AND tool = ?`,
 		labelsJSON, _ := json.Marshal(sortedStrings(newLabels))
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO protected_references (
-  reference_digest, context_id, kind, private_target_id, effective_labels_json,
+  reference_digest, context_id, owner_principal, fixture_resource_id, kind, private_target_id, effective_labels_json,
   parent_digest, producing_receipt_id, safe_alias, expires_at, state
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-			digest[:], run.ContextID, newReferenceKind, newPrivateTarget,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+			digest[:], run.ContextID, policyContext.OwnerPrincipal, nullableString(fixtureResourceID),
+			newReferenceKind, newPrivateTarget,
 			string(labelsJSON), nullableBytes(parentDigest), receiptID, alias,
 			formatTime(policyContext.ExpiresAt),
 		); err != nil {
@@ -229,6 +281,46 @@ INSERT INTO protected_references (
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) ownedFixture(
+	ctx context.Context,
+	tx *sql.Tx,
+	policyContext contextRow,
+	spec toolSpec,
+	input *referenceRow,
+) bool {
+	if policyContext.OwnerPrincipal == "" {
+		return false
+	}
+	if input != nil {
+		if input.OwnerPrincipal != policyContext.OwnerPrincipal {
+			return false
+		}
+		if input.FixtureResourceID.Valid {
+			resource, err := loadFixtureResourceByID(ctx, tx, input.FixtureResourceID.String)
+			return err == nil && resource.State == "ACTIVE" &&
+				resource.OwnerPrincipal == policyContext.OwnerPrincipal
+		}
+		return true
+	}
+	kind := fixtureKindForTool(spec.Tool)
+	if kind == "" {
+		return true
+	}
+	resource, err := loadFixtureResource(ctx, tx, spec.Tool, kind, policyContext.OwnerPrincipal)
+	return err == nil && resource.State == "ACTIVE" && resource.OwnerPrincipal == policyContext.OwnerPrincipal
+}
+
+func fixtureKindForTool(tool string) string {
+	switch tool {
+	case "support.list_tickets", "payments.list_failures":
+		return "customer-subject"
+	case "payments.aggregate_failures":
+		return "payment-summary"
+	default:
+		return ""
+	}
 }
 
 func (s *Service) persistDenial(
@@ -253,7 +345,7 @@ func (s *Service) persistDenial(
 	if code == "SCOPE_DENIED" {
 		staticDecision = "DENY"
 	}
-	if code == "FLOW_DENIED" {
+	if code == "FLOW_DENIED" || code == string(CodeOwnershipDenied) {
 		provenanceDecision = "DENY"
 		if rule != nil {
 			ruleID = &rule.ID
@@ -411,6 +503,13 @@ func nonNilStrings(values []string) []string {
 
 func nullableBytes(value []byte) any {
 	if len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
+func nullableString(value string) any {
+	if value == "" {
 		return nil
 	}
 	return value

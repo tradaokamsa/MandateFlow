@@ -80,4 +80,26 @@ describe("Container Codex runner", () => {
     expect(args.slice(-3)).toEqual(["resume", "thread-123", "continue"]);
     expect(args).not.toContain("keep-id");
   });
+
+  it("mounts only the selected Agent Codex home", () => {
+    const config = loadConfig({
+      NODE_ENV: "test",
+      CODEX_HOME: "/tmp/codex-home",
+      RUNTIME_PROVIDER: "container",
+    });
+    const args = buildContainerRunArgs(
+      {
+        runId: "run-agent-home",
+        agentId: "agent-a",
+        workspacePath: "/tmp/workspace",
+        codexHomePath: "/tmp/codex-home/agents/agent-a",
+        prompt: "continue",
+        threadId: null,
+        mandateFlowCapability: "",
+      },
+      config,
+    );
+    expect(args).toContain("type=bind,src=/tmp/codex-home/agents/agent-a,dst=/codex-home");
+    expect(args).not.toContain("type=bind,src=/tmp/codex-home,dst=/codex-home");
+  });
 });

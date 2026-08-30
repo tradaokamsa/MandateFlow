@@ -4,7 +4,7 @@
 
 > Least privilege that survives tool chaining and disposable-Runtime retries.
 
-- **Status:** Go P0 implemented; live pinned-Runtime acceptance remains an explicit pre-demo check
+- **Status:** Go P0 and P1 authority hardening implemented; live pinned-Runtime acceptance remains an explicit pre-demo check
 - **Primary runtime:** Local disposable Codex container
 - **Primary boundary:** Protected MCP tool calls
 - **MVP scope:** One mixed-purpose workflow, typed protected references and one deterministic flow policy
@@ -40,6 +40,30 @@ The MVP demonstrates two Agent-specific failure modes:
   origin by passing through an intermediate protected tool.
 - **Runtime-reset laundering:** an explicit retry receives a new Run, Runtime
   and capability but cannot erase the workflow's server-owned lineage.
+
+## P1 authority hardening
+
+The local proof of concept also includes a bounded ownership and lifecycle
+model. Agent creation chooses one fixed demo principal, `user-a` or `user-b`;
+the choice is persisted on the Agent and cannot be changed by the edit API.
+The Go sidecar binds that owner to an immutable Agent principal, root mandate,
+protected references, and seeded typed fixture resources. A mismatch produces a
+generic `OWNERSHIP_DENIED` receipt before fixture execution and does not reveal
+whether the target belongs to another demo owner.
+
+Each root mandate has an opaque ID, pinned scope, issue/expiry times, and an
+`ACTIVE` or `REVOKED` lifecycle. Revocation is an authenticated, idempotent
+control-plane transaction. The sidecar commits revocation and invalidates
+descendant capabilities before Node asks the active Runtime to stop. The
+Playground keeps the redacted evidence timeline visible, disables Send and
+Retry for the revoked mandate, and requires an explicit New secure workflow for
+fresh authority.
+
+Runtime homes are isolated at `CODEX_HOME/agents/<immutable-agent-id>`. The
+selected directory is created and validated by the server, passed to both the
+local-process and container runners, and is the only Codex home mounted into a
+Runtime. Existing records get a fresh home and their legacy shared-home thread
+is cleared; no capability is written to the home or generated Codex config.
 
 Delegated Worker mandates and general replay prevention are later extensions,
 not MVP security claims.
@@ -154,11 +178,11 @@ neither a direct Runtime route nor downstream credentials.*
 
 | Starter-kit seam | MandateFlow responsibility | Concrete integration |
 | --- | --- | --- |
-| Fastify API | Human control and evidence | Add receipt and explicit-retry routes. Revoke and new-session routes are P1. |
+| Fastify API | Human control and evidence | Add receipt, explicit-retry, mandate-summary and revocation routes. |
 | `AgentService` | Authority orchestration | Generate each raw Run capability, call Go prepare/activate/finish, and persist only safe IDs/fingerprints and retry display state. |
 | `AgentRunner` | Runtime bootstrap | Pass the Run ID, Gateway URL and capability to Codex without placing the capability value in argv or shared configuration. |
 | Codex Runtime | Protected tool data plane | Call the MCP Gateway directly, in parallel with the existing Ark inference connection. |
-| Go-owned SQLite | Trusted state | Persist mandates, immutable Run grants, capability digests, protected-reference lineage, retry relationships, counters and redacted receipts in five domain tables. |
+| Go-owned SQLite | Trusted state | Persist mandates, immutable Run grants, capability digests, owner-bound fixture resources, protected-reference lineage, retry relationships, counters and redacted receipts in six domain tables. |
 | Protected fixtures | Enforcement target | Expose Support, Payment, Case and CRM operations only through the Gateway; the Runtime receives no fixture credential or direct route. |
 
 ## Trust model
@@ -568,10 +592,10 @@ Receipts must never include:
 - Complete MCP request/response bodies.
 - Chain of thought.
 
-The P0 runs one trusted Node lifecycle adapter and one Go sidecar. Node's
+The P0/P1 implementation runs one trusted Node lifecycle adapter and one Go sidecar. Node's
 `JsonStore` retains only baseline Agent/message data and safe Go foreign IDs. Go
-exclusively owns one SQLite connection and five domain tables: contexts, runs,
-protected references, receipts and fixture counters. Authentication, admission,
+exclusively owns one SQLite connection and six domain tables: contexts, runs,
+protected references, receipts, fixture counters and fixture resources. Authentication, admission,
 embedded fixture execution, counter updates, receipt creation and derived
 reference creation occur through the Go reference monitor. An allowed fixture
 result and all related state commit in one transaction before disclosure. A
@@ -735,11 +759,11 @@ POST /api/runs/:id/retry
 ```
 
 The seeded root mandate is created by the control plane when the demo Agent
-starts its first secure workflow. P1 may add:
+starts its first secure workflow. The P1 control plane also exposes:
 
 ```text
 POST /api/mandates/:id/revoke
-POST /api/agents/:id/new-secure-session
+POST /api/agents/:id/new-demo-workflow
 ```
 
 ### Runtime boundary
@@ -913,7 +937,7 @@ For the chosen local container profile:
 - Explicit revocation, emergency stop and revoke-before-cancel ordering.
 - General mandate authoring and policy-version upgrade UI.
 - Multi-user ownership and production authentication semantics.
-- Agent-specific Codex-home isolation if needed beyond the selected demo profile.
+- Agent-specific Codex-home isolation under the configured `CODEX_HOME` root.
 - Budgets and general quotas.
 
 ### Stretch

@@ -8,6 +8,8 @@ const (
 	PolicyVersion           = 1
 	MandateTemplateID       = "morning-ops-v1"
 	GatewayAudience         = "launchpad-mcp-gateway"
+	DemoUserA               = "user-a"
+	DemoUserB               = "user-b"
 )
 
 type Permission struct {
@@ -50,6 +52,7 @@ const (
 
 type PrepareRequest struct {
 	AgentID              string       `json:"agentId"`
+	OwnerPrincipal       string       `json:"ownerPrincipal,omitempty"`
 	RuntimeInstanceID    string       `json:"runtimeInstanceId"`
 	Mode                 PrepareMode  `json:"mode"`
 	PolicyContextID      *string      `json:"policyContextId"`
@@ -63,6 +66,10 @@ type PrepareRequest struct {
 type PrepareResult struct {
 	RunGrantID            string       `json:"runGrantId"`
 	PolicyContextID       string       `json:"policyContextId"`
+	MandateID             string       `json:"mandateId"`
+	OwnerPrincipal        string       `json:"ownerPrincipal"`
+	AgentPrincipal        string       `json:"agentPrincipal"`
+	IssuedAt              time.Time    `json:"issuedAt"`
 	GrantFingerprint      string       `json:"grantFingerprint"`
 	CapabilityFingerprint string       `json:"capabilityFingerprint"`
 	Status                string       `json:"status"`
@@ -81,10 +88,36 @@ type LifecycleResult struct {
 	TerminalAt *time.Time `json:"terminalAt,omitempty"`
 }
 
+type MandateSummary struct {
+	MandateID          string       `json:"mandateId"`
+	Status             string       `json:"status"`
+	OwnerPrincipal     string       `json:"ownerPrincipal"`
+	AgentPrincipal     string       `json:"agentPrincipal"`
+	PolicyContextID    string       `json:"policyContextId"`
+	PurposeID          string       `json:"purposeId"`
+	PolicyID           string       `json:"policyId"`
+	PolicyVersion      int          `json:"policyVersion"`
+	GrantedPermissions []Permission `json:"grantedPermissions"`
+	IssuedAt           time.Time    `json:"issuedAt"`
+	ExpiresAt          time.Time    `json:"expiresAt"`
+	MandateFingerprint string       `json:"mandateFingerprint"`
+	RevokedAt          *time.Time   `json:"revokedAt,omitempty"`
+	RevokedBy          string       `json:"revokedBy,omitempty"`
+	RevocationReason   string       `json:"revocationReason,omitempty"`
+}
+
+type RevokeResult struct {
+	MandateSummary
+	AffectedRunIDs []string `json:"affectedRunIds"`
+}
+
 type Principal struct {
 	RunID           string
 	RunGrantID      string
 	AgentID         string
+	AgentPrincipal  string
+	OwnerPrincipal  string
+	MandateID       string
 	PolicyContextID string
 	Permissions     []Permission
 	ExpiresAt       time.Time
@@ -149,6 +182,15 @@ type EvidenceView struct {
 	RunID                 string        `json:"runId"`
 	PolicyContextID       string        `json:"policyContextId"`
 	RunGrantID            string        `json:"runGrantId"`
+	MandateID             string        `json:"mandateId"`
+	MandateStatus         string        `json:"mandateStatus"`
+	OwnerPrincipal        string        `json:"ownerPrincipal"`
+	AgentPrincipal        string        `json:"agentPrincipal"`
+	IssuedAt              time.Time     `json:"issuedAt"`
+	ExpiresAt             time.Time     `json:"expiresAt"`
+	RevokedAt             *time.Time    `json:"revokedAt,omitempty"`
+	RevokedBy             string        `json:"revokedBy,omitempty"`
+	RevocationReason      string        `json:"revocationReason,omitempty"`
 	RetryOfRunID          *string       `json:"retryOfRunId"`
 	RuntimeInstanceID     string        `json:"runtimeInstanceId"`
 	RunStatus             string        `json:"runStatus"`
