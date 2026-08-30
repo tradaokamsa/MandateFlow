@@ -13,6 +13,11 @@ No model credential is needed: the launcher selects the deterministic fixture
 Runtime when `GROQ_API_KEY` is absent or a placeholder. For the optional live
 Codex rehearsal, use `RUNTIME_PROVIDER=container GROQ_API_KEY=...`.
 
+The credential-free fixture profile is intentionally proof-only: it exercises
+the full MandateFlow gateway path but does not pretend to be a general coding
+Agent. Use the live Codex profile for workspace inspection, edits, and command
+execution.
+
 Open <http://localhost:3000>, unlock with `APP_AUTH_TOKEN`, create an Agent, and
 select **New secure workflow**. In the proof console, select **Run MandateFlow
 proof**, or choose the first starter prompt to run the same workflow manually:

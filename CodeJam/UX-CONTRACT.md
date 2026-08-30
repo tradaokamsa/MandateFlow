@@ -7,6 +7,9 @@
 - Target market(s): Global developer tooling; bounded demo identity only.
 - Active locales: English; browser locale is used for timestamps.
 - Language/content register: Plain, operational, sentence case.
+- Runtime profile policy: deterministic fixture mode is proof-only and must not
+  present general coding prompts; Codex-backed Runtime mode enables workspace
+  inspection, edits, and command execution.
 - Timezone/calendar policy: Absolute timestamps are formatted in the browser locale.
 - Accessibility target: WCAG 2.2 AA
 

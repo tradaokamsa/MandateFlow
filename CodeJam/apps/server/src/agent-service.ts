@@ -51,6 +51,14 @@ function addRunProgress(run: AgentRun, event: RunnerProgressEvent): void {
   }
 }
 
+function fixtureSupportsPrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return (
+    normalized.includes("mandateflow verification workflow") ||
+    normalized.includes("retry only the previously denied")
+  );
+}
+
 async function waitForCancellation<T>(promise: Promise<T>): Promise<boolean> {
   let timer: NodeJS.Timeout | null = null;
   const timedOut = new Promise<false>((resolve) => {
@@ -58,7 +66,13 @@ async function waitForCancellation<T>(promise: Promise<T>): Promise<boolean> {
     timer.unref();
   });
   try {
-    return await Promise.race([promise.then(() => true as const), timedOut]);
+    return await Promise.race([
+      promise.then(
+        () => true as const,
+        () => false as const,
+      ),
+      timedOut,
+    ]);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -424,6 +438,12 @@ export class AgentService {
         "Groq is not configured. Set GROQ_API_KEY; GROQ_MODEL is optional, then restart.",
       );
     }
+    if (this.config.runtimeProvider === "fixture" && !fixtureSupportsPrompt(prompt)) {
+      throw new HttpError(
+        409,
+        "The credential-free fixture only runs the MandateFlow proof. Use a Codex Runtime for coding work.",
+      );
+    }
     if (this.config.mandateFlowEnabled) {
       await this.ensureMandateFlowReady();
       await this.requireFinalizedAuthority(agentId);
@@ -711,6 +731,7 @@ export class AgentService {
       });
     } finally {
       this.progressWrites.delete(run.id);
+      this.cancellationRequests.delete(run.id);
       capability = "";
     }
   }
@@ -831,13 +852,10 @@ export class AgentService {
 
   private async cancelRevokedRun(agentId: string, runId: string): Promise<void> {
     this.cancellationRequests.add(runId);
-    try {
-      await waitForCancellation(this.runner.cancel(runId));
-      const execution = this.activeExecutions.get(agentId);
-      if (execution) await waitForCancellation(execution);
-    } finally {
-      this.cancellationRequests.delete(runId);
-    }
+    await waitForCancellation(this.runner.cancel(runId));
+    const execution = this.activeExecutions.get(agentId);
+    if (execution) await waitForCancellation(execution);
+    else this.cancellationRequests.delete(runId);
   }
 
   private async cancelExecution(agentId: string): Promise<void> {
@@ -850,13 +868,10 @@ export class AgentService {
       );
     if (!activeRun) return;
     this.cancellationRequests.add(activeRun.id);
-    try {
-      await waitForCancellation(this.runner.cancel(activeRun.id));
-      const execution = this.activeExecutions.get(agentId);
-      if (execution) await waitForCancellation(execution);
-    } finally {
-      this.cancellationRequests.delete(activeRun.id);
-    }
+    await waitForCancellation(this.runner.cancel(activeRun.id));
+    const execution = this.activeExecutions.get(agentId);
+    if (execution) await waitForCancellation(execution);
+    else this.cancellationRequests.delete(activeRun.id);
   }
 }
 

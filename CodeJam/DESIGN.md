@@ -62,6 +62,9 @@ health belongs in the sidebar card and the configuration warning belongs at the
 top of the workspace. Provider setup copy should identify the single required
 credential and distinguish it from optional model defaults.
 
+When the deterministic fixture profile is active, a warm inline notice labels
+the workspace as proof-only and points coding work to the Codex-backed Runtime.
+
 Run activity belongs directly beneath the proof action. It is a compact,
 timestamped activity rail: one current phase, recent safe summaries of Agent
 work, and a visible stop action while a Run is active. This is the primary

@@ -634,6 +634,27 @@ textarea:focus {
   background: rgba(251, 250, 247, 0.94);
 }
 
+.fixture-notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid #e5dfc7;
+  padding: 8px 18px;
+  color: #6f5a24;
+  background: #fffaf0;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.fixture-notice strong {
+  flex: 0 0 auto;
+  color: #624d1b;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .playground h2 {
   margin: 3px 0 0;
   font-size: 16px;
