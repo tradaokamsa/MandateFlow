@@ -43,6 +43,18 @@ export interface RunUsage {
   outputTokens?: number;
 }
 
+export type RunProgressStage = "queued" | "phase" | "tool" | "complete" | "error" | "cancelled";
+
+export interface RunProgressEvent {
+  id: string;
+  stage: RunProgressStage;
+  label: string;
+  detail: string;
+  createdAt: string;
+}
+
+export type RunnerProgressEvent = Omit<RunProgressEvent, "id" | "createdAt">;
+
 export interface AgentRun {
   id: string;
   agentId: string;
@@ -63,6 +75,7 @@ export interface AgentRun {
   capabilityFingerprint: string | null;
   grantFingerprint: string | null;
   runtimeInstanceId: string | null;
+  progress: RunProgressEvent[];
   createdAt: string;
 }
 
@@ -101,6 +114,7 @@ export interface RunnerRequest {
   threadId: string | null;
   mandateFlowCapability: string;
   codexHomePath?: string;
+  onProgress?: (event: RunnerProgressEvent) => void;
 }
 
 export interface AgentRunner {

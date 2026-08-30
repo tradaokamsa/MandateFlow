@@ -18,6 +18,7 @@ import type {
   MandateSummary,
   MandatePrepareRequest,
   Message,
+  RunnerProgressEvent,
   UpdateAgentInput,
 } from "./types.js";
 import {
@@ -36,9 +37,37 @@ const RETRY_PROMPT =
 
 class SecurityFinalizationError extends Error {}
 
+const MAX_RUN_PROGRESS_EVENTS = 80;
+const CANCELLATION_WAIT_MS = 8_000;
+
+function addRunProgress(run: AgentRun, event: RunnerProgressEvent): void {
+  run.progress.push({
+    id: randomUUID(),
+    ...event,
+    createdAt: now(),
+  });
+  if (run.progress.length > MAX_RUN_PROGRESS_EVENTS) {
+    run.progress.splice(0, run.progress.length - MAX_RUN_PROGRESS_EVENTS);
+  }
+}
+
+async function waitForCancellation<T>(promise: Promise<T>): Promise<boolean> {
+  let timer: NodeJS.Timeout | null = null;
+  const timedOut = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), CANCELLATION_WAIT_MS);
+    timer.unref();
+  });
+  try {
+    return await Promise.race([promise.then(() => true as const), timedOut]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
   private readonly cancellationRequests = new Set<string>();
+  private readonly progressWrites = new Map<string, Promise<void>>();
 
   constructor(
     private readonly config: AppConfig,
@@ -421,6 +450,15 @@ export class AgentService {
       capabilityFingerprint: null,
       grantFingerprint: null,
       runtimeInstanceId: null,
+      progress: [
+        {
+          id: randomUUID(),
+          stage: "queued",
+          label: "Run queued",
+          detail: "Waiting for the secure Agent Runtime to start.",
+          createdAt: timestamp,
+        },
+      ],
       createdAt: timestamp,
     };
     const message: Message | null = createUserMessage
@@ -481,11 +519,21 @@ export class AgentService {
     let securityFinalizationPending = false;
     try {
       if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
+      await this.queueRunProgress(run.id, {
+        stage: "phase",
+        label: "Preparing secure Run",
+        detail: "MandateFlow is checking the grant and preparing the Agent workspace.",
+      });
       const codexHomePath = await ensureAgentCodexHome(this.config.codexHome, agentAtStart.id);
       await writeCodexConfig(this.config, codexHomePath);
 
       if (this.config.mandateFlowEnabled) {
         if (!this.mandateFlow) throw new HttpError(503, "MandateFlow is unavailable");
+        await this.queueRunProgress(run.id, {
+          stage: "phase",
+          label: "Authorizing protected tools",
+          detail: "The control plane is issuing a Run-scoped capability before the Runtime starts.",
+        });
         capability = createRunCapability();
         const capabilitySha256 = createHash("sha256")
           .update(capability, "utf8")
@@ -547,6 +595,11 @@ export class AgentService {
           storedRun.startedAt = now();
         }
       });
+      await this.queueRunProgress(run.id, {
+        stage: "phase",
+        label: "Runtime started",
+        detail: "The Agent Runtime is ready to work in the selected workspace.",
+      });
 
       if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
       const result = await this.runner.run({
@@ -557,11 +610,17 @@ export class AgentService {
         threadId: agentAtStart.codexThreadId,
         mandateFlowCapability: capability,
         codexHomePath,
+        onProgress: (event) => this.queueRunProgress(run.id, event),
       });
 
       if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
 
       if (this.config.mandateFlowEnabled && this.mandateFlow) {
+        await this.queueRunProgress(run.id, {
+          stage: "phase",
+          label: "Finalizing secure Run",
+          detail: "The control plane is closing the capability and saving the decision evidence.",
+        });
         await this.store.mutate((database) => {
           const storedRun = database.runs.find((item) => item.id === run.id);
           if (storedRun) storedRun.mandateStatus = "finalizing";
@@ -577,6 +636,7 @@ export class AgentService {
         }
       }
 
+      await this.flushRunProgress(run.id);
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
@@ -589,6 +649,11 @@ export class AgentService {
         storedRun.completedAt = completedAt;
         storedRun.runtimeInstanceId = result.runtimeInstanceId;
         storedRun.mandateStatus = "closed";
+        addRunProgress(storedRun, {
+          stage: "complete",
+          label: "Run complete",
+          detail: "The Agent returned a result and the secure Run was closed.",
+        });
         database.messages.push({
           id: randomUUID(),
           agentId: agent.id,
@@ -619,6 +684,7 @@ export class AgentService {
           message += "; capability invalidation is pending";
         }
       }
+      await this.flushRunProgress(run.id);
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
         const agent = database.agents.find((item) => item.id === agentAtStart.id);
@@ -629,6 +695,13 @@ export class AgentService {
           storedRun.mandateStatus = securityFinalizationPending
             ? "security-finalization-pending"
             : "closed";
+          addRunProgress(storedRun, {
+            stage: cancelled ? "cancelled" : "error",
+            label: cancelled ? "Run cancelled" : "Run failed",
+            detail: cancelled
+              ? "The Runtime stopped before completing this request."
+              : "The Runtime could not complete this request. Review the error above and try again.",
+          });
         }
         if (agent) {
           if (agent.status !== "stopped") agent.status = cancelled ? "ready" : "error";
@@ -637,8 +710,29 @@ export class AgentService {
         }
       });
     } finally {
+      this.progressWrites.delete(run.id);
       capability = "";
     }
+  }
+
+  private queueRunProgress(runId: string, event: RunnerProgressEvent): Promise<void> {
+    const previous = this.progressWrites.get(runId) ?? Promise.resolve();
+    const next = previous
+      .then(() =>
+        this.store.mutate((database) => {
+          const storedRun = database.runs.find((candidate) => candidate.id === runId);
+          if (storedRun && ["queued", "running"].includes(storedRun.status)) {
+            addRunProgress(storedRun, event);
+          }
+        }),
+      )
+      .catch(() => undefined);
+    this.progressWrites.set(runId, next);
+    return next;
+  }
+
+  private async flushRunProgress(runId: string): Promise<void> {
+    await this.progressWrites.get(runId);
   }
 
   private async finishMandate(
@@ -738,9 +832,9 @@ export class AgentService {
   private async cancelRevokedRun(agentId: string, runId: string): Promise<void> {
     this.cancellationRequests.add(runId);
     try {
-      await this.runner.cancel(runId);
+      await waitForCancellation(this.runner.cancel(runId));
       const execution = this.activeExecutions.get(agentId);
-      if (execution) await execution;
+      if (execution) await waitForCancellation(execution);
     } finally {
       this.cancellationRequests.delete(runId);
     }
@@ -757,9 +851,9 @@ export class AgentService {
     if (!activeRun) return;
     this.cancellationRequests.add(activeRun.id);
     try {
-      await this.runner.cancel(activeRun.id);
+      await waitForCancellation(this.runner.cancel(activeRun.id));
       const execution = this.activeExecutions.get(agentId);
-      if (execution) await execution;
+      if (execution) await waitForCancellation(execution);
     } finally {
       this.cancellationRequests.delete(activeRun.id);
     }

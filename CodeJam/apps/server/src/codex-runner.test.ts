@@ -99,6 +99,39 @@ describe("Codex runner protocol", () => {
     expect(parsed.usage).toEqual({ inputTokens: 10, outputTokens: 4 });
   });
 
+  it("emits safe activity summaries without exposing command details", () => {
+    const parsed = {
+      messages: [] as string[],
+      threadId: null as string | null,
+      usage: null,
+      errors: [] as string[],
+    };
+    const progress: string[] = [];
+    const onProgress = (event: { label: string; detail: string }) => {
+      progress.push(event.label + " — " + event.detail);
+    };
+
+    parseCodexEventLine(
+      JSON.stringify({ type: "thread.started", thread_id: "thread-123" }),
+      parsed,
+      onProgress,
+    );
+    parseCodexEventLine(
+      JSON.stringify({
+        type: "item.started",
+        item: { type: "command_execution", command: "cat secret.txt" },
+      }),
+      parsed,
+      onProgress,
+    );
+
+    expect(progress).toEqual([
+      "Codex session connected — The Agent Runtime opened a secure coding session.",
+      "Running a workspace command — The Agent is running a command in the selected workspace.",
+    ]);
+    expect(progress.join(" ")).not.toContain("secret.txt");
+  });
+
   it("redacts Run authority and opaque protected references from captured output", () => {
     const capability = "mfr1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const reference = "ref1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

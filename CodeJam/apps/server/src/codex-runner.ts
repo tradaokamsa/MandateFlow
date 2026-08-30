@@ -13,6 +13,7 @@ import { redactRuntimeText } from "./trace.js";
 import type {
   AgentRunner,
   RunUsage,
+  RunnerProgressEvent,
   RunnerRequest,
   RunnerResult,
 } from "./types.js";
@@ -55,7 +56,11 @@ export function buildCodexArgs(
   return args;
 }
 
-export function parseCodexEventLine(line: string, parsed: ParsedEvents): void {
+export function parseCodexEventLine(
+  line: string,
+  parsed: ParsedEvents,
+  onProgress?: (event: RunnerProgressEvent) => void,
+): void {
   let event: Record<string, unknown>;
   try {
     event = JSON.parse(line) as Record<string, unknown>;
@@ -65,28 +70,56 @@ export function parseCodexEventLine(line: string, parsed: ParsedEvents): void {
 
   if (event.type === "thread.started" && typeof event.thread_id === "string") {
     parsed.threadId = event.thread_id;
+    onProgress?.({
+      stage: "phase",
+      label: "Codex session connected",
+      detail: "The Agent Runtime opened a secure coding session.",
+    });
+  }
+
+  if (event.type === "turn.started") {
+    onProgress?.({
+      stage: "phase",
+      label: "Agent is planning the next step",
+      detail: "The Agent is deciding whether to inspect files, edit code, run a command, or use a protected tool.",
+    });
+  }
+
+  if (event.type === "item.started" && event.item && typeof event.item === "object") {
+    const itemType = (event.item as Record<string, unknown>).type;
+    const progress = progressForCodexItem(itemType, false);
+    if (progress) onProgress?.(progress);
   }
 
   if (event.type === "item.completed" && event.item && typeof event.item === "object") {
     const item = event.item as Record<string, unknown>;
+    const progress = progressForCodexItem(item.type, true);
+    if (progress) onProgress?.(progress);
     if (item.type === "agent_message" && typeof item.text === "string") {
       parsed.messages.push(item.text);
     }
   }
 
-  if (event.type === "turn.completed" && event.usage && typeof event.usage === "object") {
-    const usage = event.usage as Record<string, unknown>;
-    parsed.usage = {
-      ...(typeof usage.input_tokens === "number"
-        ? { inputTokens: usage.input_tokens }
-        : {}),
-      ...(typeof usage.cached_input_tokens === "number"
-        ? { cachedInputTokens: usage.cached_input_tokens }
-        : {}),
-      ...(typeof usage.output_tokens === "number"
-        ? { outputTokens: usage.output_tokens }
-        : {}),
-    };
+  if (event.type === "turn.completed") {
+    if (event.usage && typeof event.usage === "object") {
+      const usage = event.usage as Record<string, unknown>;
+      parsed.usage = {
+        ...(typeof usage.input_tokens === "number"
+          ? { inputTokens: usage.input_tokens }
+          : {}),
+        ...(typeof usage.cached_input_tokens === "number"
+          ? { cachedInputTokens: usage.cached_input_tokens }
+          : {}),
+        ...(typeof usage.output_tokens === "number"
+          ? { outputTokens: usage.output_tokens }
+          : {}),
+      };
+    }
+    onProgress?.({
+      stage: "phase",
+      label: "Agent turn complete",
+      detail: "The Runtime finished this turn and is returning the result.",
+    });
   }
 
   if (event.type === "error") {
@@ -97,6 +130,55 @@ export function parseCodexEventLine(line: string, parsed: ParsedEvents): void {
           ? event.error
           : "Codex reported an unknown error";
     parsed.errors.push(message);
+    onProgress?.({
+      stage: "error",
+      label: "Codex reported an error",
+      detail: "The Agent Runtime reported a problem before the Run could finish.",
+    });
+  }
+}
+
+function progressForCodexItem(
+  itemType: unknown,
+  completed: boolean,
+): RunnerProgressEvent | null {
+  if (typeof itemType !== "string") return null;
+  const suffix = completed ? " complete" : "";
+  switch (itemType) {
+    case "command_execution":
+      return {
+        stage: "tool",
+        label: "Running a workspace command" + suffix,
+        detail: completed
+          ? "The Agent finished a command in the selected workspace."
+          : "The Agent is running a command in the selected workspace.",
+      };
+    case "file_change":
+    case "file_edit":
+      return {
+        stage: "tool",
+        label: "Updating workspace files" + suffix,
+        detail: completed
+          ? "The Agent applied a code change in the selected workspace."
+          : "The Agent is preparing a code change in the selected workspace.",
+      };
+    case "mcp_tool_call":
+    case "tool_call":
+      return {
+        stage: "tool",
+        label: "Checking a protected tool call" + suffix,
+        detail: completed
+          ? "MandateFlow recorded the protected-tool decision."
+          : "MandateFlow is checking the call before the protected service runs.",
+      };
+    case "agent_message":
+      return {
+        stage: "phase",
+        label: "Preparing the Agent response" + suffix,
+        detail: "The Agent is assembling a safe summary of the work.",
+      };
+    default:
+      return null;
   }
 }
 
@@ -204,6 +286,7 @@ export class CodexRunner implements AgentRunner {
               this.config.groqApiKey,
             ),
             parsed,
+            request.onProgress,
           );
         }
       } else {
@@ -235,6 +318,7 @@ export class CodexRunner implements AgentRunner {
             this.config.groqApiKey,
           ),
           parsed,
+          request.onProgress,
         );
       }
       if (active.cancelled) {

@@ -1,4 +1,4 @@
-import type { AgentRun, MandateEvidence } from "./types";
+import type { AgentRun, MandateEvidence, RunProgressEvent } from "./types";
 import { deriveProofSnapshot } from "./proof";
 
 interface ProofPanelProps {
@@ -7,8 +7,26 @@ interface ProofPanelProps {
   busy: boolean;
   canRun: boolean;
   canRetry: boolean;
+  canStop: boolean;
+  blockedReason?: string;
   onRunProof: () => void;
   onRetry: () => void;
+  onStop: () => void;
+}
+
+function formatProgressTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+}
+
+function progressIcon(event: RunProgressEvent): string {
+  if (event.stage === "complete") return "✓";
+  if (event.stage === "error") return "!";
+  if (event.stage === "cancelled") return "–";
+  return event.stage === "tool" ? "↗" : "·";
 }
 
 export function ProofPanel({
@@ -17,11 +35,21 @@ export function ProofPanel({
   busy,
   canRun,
   canRetry,
+  canStop,
+  blockedReason,
   onRunProof,
   onRetry,
+  onStop,
 }: ProofPanelProps) {
   const proof = deriveProofSnapshot(evidence, activeRun);
   const isRunning = activeRun != null && ["queued", "running"].includes(activeRun.status);
+  const progress = activeRun?.progress ?? [];
+  const currentProgress = progress.at(-1);
+  const visibleProgress = progress.slice(-7);
+  const progressAge = currentProgress
+    ? Date.now() - new Date(currentProgress.createdAt).getTime()
+    : 0;
+  const runtimeStalled = isRunning && progressAge > 12_000;
 
   return (
     <section className="proof-console" aria-labelledby="proof-console-title">
@@ -60,12 +88,57 @@ export function ProofPanel({
         )}
         <span className="proof-action-note" role="status">
           {isRunning
-            ? "The Runtime is collecting protected decisions."
+            ? currentProgress?.detail ?? "The Runtime is collecting protected decisions."
             : evidence
               ? `${evidence.receipts.length} server receipts · CRM counter ${evidence.crmCounter}`
-              : "The panel fills from the next Run's persisted receipts."}
+              : blockedReason ?? "The panel fills from the next Run's persisted receipts."}
         </span>
       </div>
+
+      {activeRun && (
+        <section className="run-activity" aria-live={isRunning ? "polite" : undefined} aria-labelledby="run-activity-title">
+          <div className="run-activity-heading">
+            <div>
+              <span className="eyebrow">Runtime activity</span>
+              <strong id="run-activity-title">
+                {currentProgress?.label ?? (isRunning ? "Starting the Agent Runtime" : "Run activity")}
+              </strong>
+            </div>
+            <div className="run-activity-actions">
+              <span className={"run-status run-status-" + activeRun.status}>{activeRun.status}</span>
+              {isRunning && canStop && (
+                <button type="button" className="button button-danger button-compact" onClick={onStop} disabled={busy}>
+                  Stop run
+                </button>
+              )}
+            </div>
+          </div>
+          <ol className="run-progress-list" aria-label="Recent Agent Runtime activity">
+            {visibleProgress.map((event) => (
+              <li className={"run-progress-item run-progress-" + event.stage} key={event.id}>
+                <span className="run-progress-icon" aria-hidden="true">{progressIcon(event)}</span>
+                <span className="run-progress-copy">
+                  <strong>{event.label}</strong>
+                  <span>{event.detail}</span>
+                </span>
+                <time dateTime={event.createdAt}>{formatProgressTime(event.createdAt)}</time>
+              </li>
+            ))}
+          </ol>
+          {runtimeStalled && (
+            <div className="run-stall-notice" role="alert">
+              <span>
+                No new Runtime event for {Math.max(1, Math.round(progressAge / 1000))}s. The Agent may be waiting on a model or command.
+              </span>
+              {canStop && (
+                <button type="button" className="button button-ghost button-compact" onClick={onStop} disabled={busy}>
+                  Stop and review
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       <div className="proof-rows" role="list" aria-label="MandateFlow proof outcomes">
         {proof.rows.map((row) => (

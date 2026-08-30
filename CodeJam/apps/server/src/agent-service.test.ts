@@ -20,6 +20,11 @@ import { WorkspaceManager } from "./workspace.js";
 
 class FakeRunner implements AgentRunner {
   async run(request: RunnerRequest): Promise<RunnerResult> {
+    request.onProgress?.({
+      stage: "tool",
+      label: "Running a workspace command",
+      detail: "The Agent is running a test command in the selected workspace.",
+    });
     return {
       output: "Completed: " + request.prompt,
       threadId: request.threadId ?? "fake-thread",
@@ -99,6 +104,12 @@ describe("Agent lifecycle", () => {
     const agent = await service.createAgent({ name: "Coder" });
     const { run } = await service.sendMessage(agent.id, "write hello world");
     await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(service.getRun(run.id).progress.map((event) => event.label)).toContain(
+      "Run complete",
+    );
+    expect(service.getRun(run.id).progress.map((event) => event.label)).toContain(
+      "Running a workspace command",
+    );
     const messages = service.getMessages(agent.id);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");

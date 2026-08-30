@@ -62,6 +62,12 @@ health belongs in the sidebar card and the configuration warning belongs at the
 top of the workspace. Provider setup copy should identify the single required
 credential and distinguish it from optional model defaults.
 
+Run activity belongs directly beneath the proof action. It is a compact,
+timestamped activity rail: one current phase, recent safe summaries of Agent
+work, and a visible stop action while a Run is active. This is the primary
+feedback pattern for long-running or model-backed work; a spinner alone is not
+enough.
+
 ## Elevation & Shapes
 
 Use the existing paper panels, subtle shadows, 10px control radius, and 14px
@@ -79,6 +85,10 @@ color, and configuration failures explain the correction: set `GROQ_API_KEY`;
 ## Do's and Don'ts
 
 - **Do:** Keep provider status concise and visible beside the runtime identity.
+- **Do:** Show what the Agent is doing now, what happened recently, and when the
+  last Runtime event arrived.
+- **Do:** Make stalled work recoverable with a clear stop action and explain
+  what the user can do next.
 - **Do:** Reuse existing spacing, typography, focus, and button patterns.
 - **Don't:** Display API keys, raw provider errors, or secret-bearing runtime output.
 - **Don't:** Turn a small setup change into a separate provider dashboard.

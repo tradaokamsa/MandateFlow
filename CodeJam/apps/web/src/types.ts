@@ -1,6 +1,15 @@
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type DemoOwnerPrincipal = "user-a" | "user-b";
+export type RunProgressStage = "queued" | "phase" | "tool" | "complete" | "error" | "cancelled";
+
+export interface RunProgressEvent {
+  id: string;
+  stage: RunProgressStage;
+  label: string;
+  detail: string;
+  createdAt: string;
+}
 
 export interface Agent {
   id: string;
@@ -57,6 +66,7 @@ export interface AgentRun {
   capabilityFingerprint: string | null;
   grantFingerprint: string | null;
   runtimeInstanceId: string | null;
+  progress: RunProgressEvent[];
   createdAt: string;
 }
 
