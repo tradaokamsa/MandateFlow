@@ -11,6 +11,11 @@ if [[ -f .env ]]; then
   set +a
 fi
 
+mandateflow_dir="${MANDATEFLOW_DIR:-$repo_dir/../middleware/mandateflow}"
+if [[ "$mandateflow_dir" != /* ]]; then
+  mandateflow_dir="$repo_dir/$mandateflow_dir"
+fi
+
 runtime_image="${CONTAINER_RUNTIME_IMAGE:-volc-agent-runtime:local}"
 runtime_base_image="${CONTAINER_RUNTIME_BASE_IMAGE:-node:22-bookworm-slim}"
 runtime_apt_mirror="${CONTAINER_APT_MIRROR:-}"
@@ -24,6 +29,13 @@ mandateflow_control_port="${MANDATEFLOW_CONTROL_HOST_PORT:-3002}"
 log() {
   printf '[local-poc] %s\n' "$*" >&2
 }
+
+if [[ ! -d "$mandateflow_dir" ]]; then
+  log "MandateFlow module was not found at $mandateflow_dir."
+  log "Set MANDATEFLOW_DIR to the middleware directory."
+  exit 2
+fi
+mandateflow_dir="$(cd "$mandateflow_dir" && pwd)"
 
 engine_works() {
   "$1" info >/dev/null 2>&1
@@ -161,14 +173,14 @@ cleanup
 log "Building and testing the Go MandateFlow reference monitor."
 "$engine" build \
   --target test \
-  --file middleware/mandateflow/Dockerfile \
+  --file "$mandateflow_dir/Dockerfile" \
   --build-arg "GO_IMAGE=$mandateflow_go_image" \
-  middleware/mandateflow
+  "$mandateflow_dir"
 "$engine" build \
-  --file middleware/mandateflow/Dockerfile \
+  --file "$mandateflow_dir/Dockerfile" \
   --build-arg "GO_IMAGE=$mandateflow_go_image" \
   --tag "$mandateflow_image" \
-  middleware/mandateflow
+  "$mandateflow_dir"
 
 log "Building $runtime_image from Dockerfile.runtime (base: $runtime_base_image)."
 "$engine" build \

@@ -2,7 +2,15 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-module_dir="$repo_dir/middleware/mandateflow"
+module_dir="${MANDATEFLOW_DIR:-$repo_dir/../middleware/mandateflow}"
+if [[ "$module_dir" != /* ]]; then
+  module_dir="$repo_dir/$module_dir"
+fi
+if [[ ! -d "$module_dir" ]]; then
+  printf 'MandateFlow module was not found at %s. Set MANDATEFLOW_DIR to its path.\n' "$module_dir" >&2
+  exit 2
+fi
+module_dir="$(cd "$module_dir" && pwd)"
 
 if command -v go >/dev/null 2>&1; then
   mandateflow_go_cache="${TMPDIR:-/tmp}/mandateflow-go-cache"

@@ -808,10 +808,10 @@ For the chosen local container profile:
 | `apps/server/src/codex-runner.ts` | Add request-specific capability environment injection without logging the value. |
 | `apps/server/src/container-codex-runner.ts` | Key active processes, container names and cancellation by `runId`; inject the named environment variable, configure the tested host route and expose a Runtime/container identifier for demo evidence. |
 | `apps/server/src/mandateflow-client.ts` | Strict authenticated client for Go lifecycle and evidence control operations; contains no policy logic. |
-| `middleware/mandateflow/` | Go Streamable HTTP MCP gateway, immutable grants, provenance/reference monitor, embedded fixtures, receipts and five-table SQLite store. |
+| `middleware/mandateflow/` (sibling to `CodeJam/`) | Go Streamable HTTP MCP gateway, immutable grants, provenance/reference monitor, embedded fixtures, receipts and five-table SQLite store. |
 | `middleware/mandateflow/config/mixed-operations.v1.json` | Startup-validated and context-pinned MVP rule. |
 | `apps/web/src/types.ts`, `api.ts`, `App.tsx` | Add safe receipt/retry types and calls, the seeded purpose summary, decision timeline and fixture counter. |
-| `README.md`, `docs/DEMO.md` | Document fresh-start setup, the exact seeded prompt, selected container engine, expected counter transitions, limitations and rehearsal procedure. Copy this proposal and its assets into the `CodeJam` repository before submission. |
+| `README.md`, `docs/DEMO.md` | Document fresh-start setup, the exact seeded prompt, selected container engine, expected counter transitions, limitations and rehearsal procedure. Keep the implementation blueprint and middleware in the parent workspace alongside the external `CodeJam/` checkout. |
 
 ## Automated verification
 
