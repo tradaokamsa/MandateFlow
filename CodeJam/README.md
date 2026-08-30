@@ -266,9 +266,10 @@ docker compose config
 ```
 
 Use `npm run test:server:watch` while iterating on the server. `check:fast`
-runs typechecks, server tests, and the host Go tests without production bundle
-builds, Docker image builds, or Groq requests. Keep `npm run check` as the
-complete local gate before opening a pull request.
+runs TypeScript typechecks, server tests, Go formatting, `go vet`, and race
+tests without production bundle builds, Docker image builds, or Groq requests.
+It requires a local Go 1.23+ toolchain. Keep `npm run check` as the complete
+local gate before opening a pull request.
 
 ## Documentation
 

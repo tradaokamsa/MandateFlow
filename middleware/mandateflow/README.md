@@ -18,6 +18,14 @@ cd CodeJam
 npm run check:mandateflow
 ```
 
+Run the complete Go quality gate (formatting, vet, and race-enabled tests) with
+the host Go toolchain:
+
+```bash
+cd CodeJam
+npm run check:go
+```
+
 Or from this directory with a host Go toolchain:
 
 ```bash

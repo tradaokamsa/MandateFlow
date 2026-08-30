@@ -10,6 +10,11 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mandateflowd ./cmd
 FROM build AS test
 RUN go test ./...
 
+FROM build AS quality
+RUN test -z "$(gofmt -l .)" \
+    && go vet ./... \
+    && go test -race ./...
+
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/mandateflowd /usr/local/bin/mandateflowd
 COPY config/mixed-operations.v1.json /etc/mandateflow/mixed-operations.v1.json
