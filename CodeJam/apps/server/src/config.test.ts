@@ -97,14 +97,22 @@ describe("Groq configuration", () => {
     const config = loadConfig({
       NODE_ENV: "test",
       CODEX_HOME: codexHome,
+      RUNTIME_PROVIDER: "container",
       GROQ_API_KEY: "gsk-test-secret",
       GROQ_MODEL: "openai/gpt-oss-20b",
     });
 
     await writeCodexConfig(config);
     const codexConfig = await readFile(path.join(codexHome, "config.toml"), "utf8");
+    const runtimeInstructions = await readFile(
+      path.join(codexHome, "runtime-instructions.md"),
+      "utf8",
+    );
 
     expect(codexConfig).toContain('model = "openai/gpt-oss-20b"');
+    expect(codexConfig).toContain(
+      'model_instructions_file = "/codex-home/runtime-instructions.md"',
+    );
     expect(codexConfig).toContain('model_reasoning_summary = "none"');
     expect(codexConfig).toContain("model_supports_reasoning_summaries = false");
     expect(codexConfig).toContain('model_provider = "groq"');
@@ -116,5 +124,7 @@ describe("Groq configuration", () => {
     expect(codexConfig).toContain('env_key = "GROQ_API_KEY"');
     expect(codexConfig).toContain('wire_api = "responses"');
     expect(codexConfig).not.toContain("gsk-test-secret");
+    expect(runtimeInstructions).toContain("Call the necessary MCP tools directly");
+    expect(runtimeInstructions).toContain("never modify, infer, or reveal them");
   });
 });
