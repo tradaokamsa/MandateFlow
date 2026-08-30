@@ -2,15 +2,18 @@
 
 A minimal Agent platform for three-day middleware hackathons. It provides Agent
 CRUD, a browser Playground, persistent workspaces, and Codex CLI backed by the
-Volcengine Ark Responses API.
+Volcengine Ark Responses API. Its optional MandateFlow P0 demonstrates
+run-scoped authority, provenance-aware tool policy, durable safe receipts, and
+deny-before-disclosure enforcement through a separate MCP Gateway.
 
 Run it locally with Docker, Colima, or rootless Podman, or deploy it to
 Volcengine ECS.
 
 > [!WARNING]
-> This is a single-user proof of concept. It intentionally has no identity,
-> tracing, audit, or hardened sandbox middleware. Do not use production data or
-> credentials. See [SECURITY.md](SECURITY.md).
+> This is a single-user proof of concept, not a production identity, audit, or
+> hardened sandbox system. Use only the embedded synthetic demo data and a
+> scoped model credential. See [SECURITY.md](SECURITY.md) and the
+> [MandateFlow limitations](docs/DEMO.md#p0-boundaries).
 
 ## Screenshots
 
@@ -29,6 +32,8 @@ Volcengine ECS.
 - Fastify control plane with asynchronous Run state
 - Persistent Agent workspaces and Codex sessions
 - Disposable Docker, Colima, or Podman container for each local turn
+- Optional MandateFlow MCP Gateway with per-Run capabilities, exact permission
+  tuples, provenance policy, safe evidence, and narrow completed-Run Retry
 - Docker and Terraform deployment paths for Volcengine ECS
 
 ## Requirements
@@ -38,7 +43,9 @@ Volcengine ECS.
 - Docker, Colima, or Podman
 - A Volcengine Ark API key and endpoint that supports the Responses API
 
-Codex CLI is included in the Runtime image and is not required on the host.
+Codex CLI `0.111.0` is pinned in the Runtime image and is not required on the
+host. MandateFlow pins the MCP Server, Node, and Fastify SDK packages to
+`2.0.0`.
 
 ## Local browser SOP
 
@@ -110,7 +117,36 @@ containers but keeps Agent workspaces and conversations.
 
 Run the same `npm run poc` command to continue later.
 
-### Select a specific container engine
+## MandateFlow demo
+
+Start the provenance-policy demo with fresh state and a CRM invocation counter
+of `0`:
+
+```bash
+ARK_API_KEY=your-ark-api-key \
+ARK_MODEL=ep-your-endpoint-id \
+npm run demo:mandateflow
+```
+
+The launcher chooses Docker, Colima, or Podman, generates the required browser
+token, builds the pinned Codex `0.111.0` Runtime, and verifies that the Runtime
+can reach the MCP listener. Open <http://localhost:3000>, enter the printed
+browser token, and follow the exact Agent setup and prompts in
+[docs/DEMO.md](docs/DEMO.md).
+
+When enabled, one Node process starts two Fastify listeners over the same
+`JsonStore`, `AgentService`, readiness state, and `MandateFlowKernel`:
+
+- Browser/UI/API listener: loopback-only, port `3000`, authenticated with the
+  generated app token.
+- MCP-only listener: container-reachable, port `3001`; `/mcp` requires the
+  current Run capability and `/healthz` exposes readiness only.
+
+The browser listener never serves `/mcp`, and the MCP listener never serves
+browser lifecycle, evidence, Retry, or deletion routes. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the trust boundaries.
+
+## Select a specific container engine
 
 Force Podman when multiple engines are installed:
 
@@ -202,11 +238,17 @@ cp deploy/volcengine/terraform.tfvars.example \
 | `ARK_API_KEY` | Required | Ark model API key. |
 | `ARK_MODEL` | Required | Responses-capable endpoint or model ID. |
 | `ARK_BASE_URL` | Beijing v3 endpoint | Ark OpenAI-compatible API URL. |
-| `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
+| `APP_AUTH_TOKEN` | Empty on loopback when MandateFlow is off | Shared browser token; MandateFlow requires a URL-safe value with at least 256 bits. |
 | `RUNTIME_PROVIDER` | `local-process` | `container` for disposable local Runtime containers. |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode. |
 | `CODEX_TIMEOUT_MS` | `600000` | Maximum duration of one turn. |
 | `LOCAL_POC_DATA_ROOT` | Platform-specific | Local metadata, workspace, and session directory. |
+| `MANDATEFLOW_ENABLED` | `false` | Start the separate MandateFlow MCP listener and issue per-Run authority. |
+| `MANDATEFLOW_MCP_BIND_HOST` | `0.0.0.0` | Container-reachable MCP-only bind host. |
+| `MANDATEFLOW_MCP_PORT` | `3001` | MCP-only port; it must differ from `PORT`. |
+| `MANDATEFLOW_RUNTIME_MCP_URL` | Required when enabled | Runtime-visible MCP origin, without `/mcp`. |
+| `MANDATEFLOW_CONTAINER_ADD_HOST` | Empty | Optional Linux Docker `host.docker.internal:host-gateway` mapping. |
+| `MANDATEFLOW_CAPABILITY_TTL_MS` | `CODEX_TIMEOUT_MS + 60000` | Per-Run capability lifetime; must exceed the Codex timeout. |
 
 See [.env.example](.env.example) for all Runtime and resource-limit options.
 
@@ -214,17 +256,24 @@ See [.env.example](.env.example) for all Runtime and resource-limit options.
 
 ```mermaid
 flowchart LR
-    UI["React Web UI"] --> API["Fastify control plane"]
-    API --> Store["JSON metadata and Agent workspaces"]
-    API --> Runtime{"Runtime provider"}
+    UI["React Web UI"] --> Browser["Browser/API listener :3000"]
+    Browser --> Service["AgentService"]
+    Service --> Shared["Shared JsonStore + MandateFlowKernel"]
+    Service --> Runtime{"Runtime provider"}
     Runtime -->|Local POC| Container["Disposable Docker / Colima / Podman container"]
     Runtime -->|ECS profile| Codex["Codex CLI in application container"]
+    Container -->|Per-Run capability| MCP["MCP-only listener :3001"]
+    Codex -->|Per-Run capability| MCP
+    MCP --> Shared
     Container --> Ark["Volcengine Ark Responses API"]
     Codex --> Ark
 ```
 
 The first turn uses `codex exec`; later turns resume the stored Codex thread.
-Deleting an Agent archives its workspace under `workspaces/.deleted/`.
+Deleting an Agent archives its workspace under `workspaces/.deleted/`. In
+MandateFlow mode, the raw capability exists only in the Run environment; the
+store keeps its hash and the browser evidence API returns fingerprints and
+redacted causal receipts.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component and extension
 boundaries.
@@ -237,10 +286,26 @@ terraform fmt -check -recursive deploy/volcengine
 docker compose config
 ```
 
+The real Codex/container/MCP compatibility gate is intentionally separate
+because it consumes Ark and requires a running container engine:
+
+```bash
+ARK_API_KEY=your-ark-api-key \
+ARK_MODEL=ep-your-endpoint-id \
+npm run test:mandateflow:e2e
+```
+
+That live gate was not executed in the current implementation environment;
+unit, integration, build, and dual-listener health checks were executed. Run it
+on the intended Docker, Colima, or Podman demo host before presenting.
+
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Local POC](docs/LOCAL_POC.md)
+- [MandateFlow demo and rehearsal](docs/DEMO.md)
+- [MandateFlow concept and claim boundary](docs/MANDATEFLOW.md)
+- [MandateFlow TypeScript implementation blueprint](docs/MANDATEFLOW_IMPLEMENTATION_TYPESCRIPT.md)
 - [Deployment](docs/DEPLOYMENT.md)
 - [Hackathon extension guide](docs/HACKATHON_EXTENSION_GUIDE.md)
 - [Security policy](SECURITY.md)

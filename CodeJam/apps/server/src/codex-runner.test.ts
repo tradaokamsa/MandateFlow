@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexArgs, parseCodexEventLine } from "./codex-runner.js";
+import { CAPABILITY_ENV } from "./config.js";
+import { loadConfig } from "./config.js";
+import {
+  buildCodexArgs,
+  buildCodexEnvironment,
+  parseCodexEventLine,
+} from "./codex-runner.js";
 
 describe("Codex runner protocol", () => {
   it("builds a new-session invocation", () => {
     const args = buildCodexArgs(
       {
+        runId: "run",
         agentId: "agent",
         workspacePath: "/tmp/workspace",
         prompt: "build a calculator",
         threadId: null,
+        mandateFlowCapability: null,
       },
       "workspace-write",
     );
@@ -27,10 +35,12 @@ describe("Codex runner protocol", () => {
   it("resumes a stored Codex thread", () => {
     const args = buildCodexArgs(
       {
+        runId: "run",
         agentId: "agent",
         workspacePath: "/tmp/workspace",
         prompt: "add tests",
         threadId: "thread-123",
+        mandateFlowCapability: null,
       },
       "workspace-write",
     );
@@ -69,5 +79,31 @@ describe("Codex runner protocol", () => {
     expect(parsed.threadId).toBe("thread-123");
     expect(parsed.messages).toEqual(["Done."]);
     expect(parsed.usage).toEqual({ inputTokens: 10, outputTokens: 4 });
+  });
+
+  it("passes a capability only through the request-specific child environment", () => {
+    const capability = "mfr1_" + "a".repeat(43);
+    const config = loadConfig({
+      NODE_ENV: "test",
+      CODEX_HOME: "/tmp/codex-home",
+      ARK_API_KEY: "ark-secret",
+    });
+    const request = {
+      runId: "run-123",
+      agentId: "agent",
+      workspacePath: "/tmp/workspace",
+      prompt: "continue safely",
+      threadId: null,
+      mandateFlowCapability: capability,
+    };
+
+    const environment = buildCodexEnvironment(config, capability, {});
+    const args = buildCodexArgs(request, config.codexSandboxMode);
+
+    expect(environment[CAPABILITY_ENV]).toBe(capability);
+    expect(environment.ARK_API_KEY).toBe("ark-secret");
+    expect(args).not.toContain(capability);
+    expect(JSON.stringify(args)).not.toContain(capability);
+    expect(process.env[CAPABILITY_ENV]).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@ export interface Agent {
   status: AgentStatus;
   workspacePath: string;
   codexThreadId: string | null;
+  activePolicyContextId: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
@@ -40,15 +41,15 @@ export interface AgentRun {
   usage: RunUsage | null;
   startedAt: string | null;
   completedAt: string | null;
+  policyContextId: string | null;
+  runGrantId: string | null;
+  retryOfRunId: string | null;
+  capabilityFingerprint: string | null;
+  runtimeFingerprint: string | null;
   createdAt: string;
 }
 
-export interface Database {
-  version: 1;
-  agents: Agent[];
-  messages: Message[];
-  runs: AgentRun[];
-}
+export type { DatabaseV2 as Database } from "./mandateflow/types.js";
 
 export interface CreateAgentInput {
   name: string;
@@ -66,17 +67,20 @@ export interface RunnerResult {
   output: string;
   threadId: string | null;
   usage: RunUsage | null;
+  runtimeId: string;
 }
 
 export interface RunnerRequest {
+  runId: string;
   agentId: string;
   workspacePath: string;
   prompt: string;
   threadId: string | null;
+  mandateFlowCapability: string | null;
 }
 
 export interface AgentRunner {
   run(request: RunnerRequest): Promise<RunnerResult>;
-  cancel(agentId: string): Promise<boolean>;
+  cancel(runId: string): Promise<boolean>;
   isAvailable(): Promise<boolean>;
 }

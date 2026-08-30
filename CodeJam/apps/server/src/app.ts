@@ -22,6 +22,7 @@ const updateAgentBody = createAgentBody.partial().refine(
 const messageBody = z.object({
   content: z.string().trim().min(1).max(50_000),
 });
+const emptyBody = z.object({}).strict();
 
 export async function createApp(
   config: AppConfig,
@@ -43,11 +44,12 @@ export async function createApp(
   });
 
   app.addHook("onRequest", async (request, reply) => {
+    const routePattern = request.routeOptions.url ?? "";
     if (
       !config.authToken ||
-      !request.url.startsWith("/api/") ||
-      request.url === "/api/health" ||
-      request.url === "/api/auth"
+      !routePattern.startsWith("/api/") ||
+      routePattern === "/api/health" ||
+      routePattern === "/api/auth"
     ) {
       return;
     }
@@ -128,6 +130,17 @@ export async function createApp(
     return { run: service.getRun(id) };
   });
 
+  app.get("/api/runs/:id/mandateflow", async (request) => {
+    const { id } = runIdParams.parse(request.params);
+    return { evidence: service.mandateFlowEvidence(id) };
+  });
+
+  app.post("/api/runs/:id/retry", async (request, reply) => {
+    const { id } = runIdParams.parse(request.params);
+    emptyBody.parse(request.body ?? {});
+    return reply.code(202).send(await service.retryRun(id));
+  });
+
   if (config.nodeEnv === "production") {
     const webRoot = fileURLToPath(new URL("../../web/dist", import.meta.url));
     await app.register(fastifyStatic, {
@@ -135,8 +148,29 @@ export async function createApp(
       prefix: "/",
     });
     app.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith("/api/")) {
+      let pathname: string;
+      try {
+        pathname = decodeURIComponent(
+          new URL(request.url, "http://localhost").pathname,
+        );
+      } catch {
+        return reply.code(404).send({ error: "Route not found" });
+      }
+      if (pathname === "/api" || pathname.startsWith("/api/")) {
         return reply.code(404).send({ error: "API route not found" });
+      }
+      const reservedListenerPath =
+        pathname === "/mcp" ||
+        pathname.startsWith("/mcp/") ||
+        pathname === "/healthz" ||
+        pathname.startsWith("/healthz/");
+      const acceptsHtml = request.headers.accept?.includes("text/html") ?? false;
+      if (
+        reservedListenerPath ||
+        (request.method !== "GET" && request.method !== "HEAD") ||
+        !acceptsHtml
+      ) {
+        return reply.code(404).send({ error: "Route not found" });
       }
       return reply.sendFile("index.html");
     });

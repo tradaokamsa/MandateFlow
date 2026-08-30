@@ -15,8 +15,10 @@
     "build": "npm run build -w @launchpad/web && npm run build -w @launchpad/server",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test -w @launchpad/server",
-    "check": "npm run typecheck && npm run test && npm run build",
+    "test:mandateflow:e2e": "npm run test:mandateflow:e2e -w @launchpad/server",
+    "check": "npm run typecheck && npm run test && npm run build && npm run test:dist-policy -w @launchpad/server",
     "poc": "./scripts/start-local-poc.sh",
+    "demo:mandateflow": "./scripts/start-mandateflow-demo.sh",
     "start": "npm run start -w @launchpad/server"
   },
   "devDependencies": {

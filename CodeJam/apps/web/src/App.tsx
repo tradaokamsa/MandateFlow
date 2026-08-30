@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, setAuthToken } from "./api";
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type {
+  Agent,
+  AgentRun,
+  MandateFlowEvidence,
+  Message,
+  SystemInfo,
+} from "./types";
 
 const starterPrompts = [
   "Create a small TypeScript CLI that prints a weather summary from sample JSON.",
@@ -35,6 +41,206 @@ function Spinner() {
   return <span className="spinner" aria-label="Loading" />;
 }
 
+function MandateFlowPanel({
+  run,
+  evidence,
+  loading,
+  evidenceError,
+  ready,
+  retrying,
+  retryDisabled,
+  onRetry,
+}: {
+  run: AgentRun | null;
+  evidence: MandateFlowEvidence | null;
+  loading: boolean;
+  evidenceError: string | null;
+  ready: boolean;
+  retrying: boolean;
+  retryDisabled: boolean;
+  onRetry: () => void;
+}) {
+  const currentEvidence = evidence?.runId === run?.id ? evidence : null;
+  const receipts = currentEvidence
+    ? [...currentEvidence.receipts].sort(
+        (left, right) => left.sequence - right.sequence,
+      )
+    : [];
+  const latestCounter = [...receipts]
+    .reverse()
+    .find(
+      (receipt) =>
+        receipt.tool === "crm.resolve_customer" &&
+        (receipt.counterAfter !== null || receipt.counterBefore !== null),
+    );
+  const crmCount = latestCounter?.counterAfter ?? latestCounter?.counterBefore ?? 0;
+  const hasRetryableDenial =
+    currentEvidence?.retryOfRunId === null &&
+    receipts.some(
+      (receipt) =>
+        receipt.tool === "crm.resolve_customer" &&
+        receipt.decision === "DENY" &&
+        receipt.ruleId === "NO_PAYMENT_REIDENTIFICATION",
+    );
+  const completedSecureRun =
+    run?.status === "completed" &&
+    run.policyContextId !== null &&
+    hasRetryableDenial;
+
+  return (
+    <aside className="mandateflow-panel" aria-label="MandateFlow evidence">
+      <div className="evidence-heading">
+        <div>
+          <span className="eyebrow">MandateFlow</span>
+          <h2>Authority evidence</h2>
+        </div>
+        <span className={"gateway-state " + (ready ? "gateway-ready" : "gateway-down")}>
+          <span />
+          {ready ? "Gateway ready" : "Gateway unavailable"}
+        </span>
+      </div>
+
+      {completedSecureRun && (
+        <button
+          className="button button-primary retry-button"
+          type="button"
+          onClick={onRetry}
+          disabled={retryDisabled}
+        >
+          {retrying ? <Spinner /> : "Retry denied CRM step"}
+        </button>
+      )}
+
+      {!run ? (
+        <div className="evidence-empty">
+          Evidence appears after this Agent starts a secure Run.
+        </div>
+      ) : run.policyContextId === null ? (
+        <div className="evidence-empty">
+          This Run has no MandateFlow authority.
+        </div>
+      ) : !currentEvidence && loading ? (
+        <div className="evidence-empty evidence-loading">
+          <Spinner /> Loading durable evidence…
+        </div>
+      ) : currentEvidence ? (
+        <>
+          <section className="evidence-purpose">
+            <span className="eyebrow">Purpose</span>
+            <strong>{currentEvidence.purposeId.replaceAll("_", " ")}</strong>
+            <p>{currentEvidence.purposeSummary}</p>
+          </section>
+
+          <section className="evidence-section">
+            <div className="evidence-section-title">
+              <span>Authority fingerprints</span>
+              <span>{currentEvidence.retryOfRunId ? "Retry" : "Root Run"}</span>
+            </div>
+            <dl className="fingerprint-grid">
+              <div><dt>Context</dt><dd>{currentEvidence.contextFingerprint}</dd></div>
+              <div><dt>Policy</dt><dd>{currentEvidence.policyFingerprint}</dd></div>
+              <div><dt>Grant</dt><dd>{currentEvidence.grantFingerprint}</dd></div>
+              <div><dt>Capability</dt><dd>{currentEvidence.capabilityFingerprint}</dd></div>
+              <div><dt>Runtime</dt><dd>{currentEvidence.runtimeFingerprint ?? "pending"}</dd></div>
+            </dl>
+          </section>
+
+          <section className="evidence-section">
+            <div className="evidence-section-title">
+              <span>Exact permissions</span>
+              <span>{currentEvidence.permissions.length}</span>
+            </div>
+            <ul className="permission-list">
+              {currentEvidence.permissions.map((permission) => (
+                <li key={`${permission.tool}:${permission.action}:${permission.resourceKind}`}>
+                  <code>{permission.tool}</code>
+                  <span>{permission.action} · {permission.resourceKind}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="evidence-section">
+            <div className="counter-card">
+              <div>
+                <span className="eyebrow">Protected fixture counter</span>
+                <strong>CRM invocations</strong>
+              </div>
+              <b>{crmCount}</b>
+            </div>
+          </section>
+
+          <section className="evidence-section evidence-receipts">
+            <div className="evidence-section-title">
+              <span>Ordered receipts</span>
+              <span>{receipts.length}</span>
+            </div>
+            {receipts.length === 0 ? (
+              <div className="evidence-empty compact">No protected calls yet.</div>
+            ) : (
+              <ol className="receipt-list">
+                {receipts.map((receipt) => (
+                  <li key={receipt.id}>
+                    <div className="receipt-marker">{receipt.sequence}</div>
+                    <article>
+                      <div className="receipt-title">
+                        <code>{receipt.tool}</code>
+                        <span className={"decision decision-" + receipt.decision.toLowerCase()}>
+                          {receipt.decision}
+                        </span>
+                      </div>
+                      <div className="receipt-stage">
+                        {receipt.enforcementStage.replace("_", " ")} · {receipt.outcome.replace("_", " ")}
+                      </div>
+                      <div className="receipt-detail">
+                        Static {receipt.staticScopeDecision} · Provenance {receipt.provenanceDecision}
+                      </div>
+                      <div className="receipt-detail">
+                        Downstream {receipt.downstreamInvoked ? "invoked" : "not invoked"}
+                        {receipt.ruleId ? ` · ${receipt.ruleId}` : ""}
+                      </div>
+                      <p>{receipt.reason}</p>
+                      <div className="receipt-summary">{receipt.redactedInputSummary}</div>
+                      {receipt.redactedResultSummary && (
+                        <div className="receipt-summary">{receipt.redactedResultSummary}</div>
+                      )}
+                      {(receipt.counterBefore !== null || receipt.counterAfter !== null) && (
+                        <div className="receipt-detail">
+                          Counter {receipt.counterBefore ?? "—"} → {receipt.counterAfter ?? "—"}
+                        </div>
+                      )}
+                      {(receipt.inputReferenceAliases.length > 0 ||
+                        receipt.producedReferenceAliases.length > 0) && (
+                        <div className="receipt-detail">
+                          Refs {[...receipt.inputReferenceAliases, ...receipt.producedReferenceAliases].join(" · ")}
+                        </div>
+                      )}
+                      {receipt.causedByReceiptIds.length > 0 && (
+                        <div className="receipt-detail">
+                          Caused by {receipt.causedByReceiptIds.map((id) => id.slice(0, 8)).join(", ")}
+                        </div>
+                      )}
+                      {receipt.safeAlternative && (
+                        <div className="safe-alternative">Safe alternative · {receipt.safeAlternative}</div>
+                      )}
+                    </article>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+        </>
+      ) : (
+        <div className="evidence-empty">
+          Evidence is not available for this Run yet.
+        </div>
+      )}
+
+      {evidenceError && <div className="evidence-error">{evidenceError}</div>}
+    </aside>
+  );
+}
+
 export default function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -45,6 +251,10 @@ export default function App() {
   const [form, setForm] = useState(emptyForm);
   const [prompt, setPrompt] = useState("");
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
+  const [evidence, setEvidence] = useState<MandateFlowEvidence | null>(null);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
@@ -59,6 +269,10 @@ export default function App() {
     () => agents.find((agent) => agent.id === selectedId) ?? null,
     [agents, selectedId],
   );
+  const runIsActive =
+    activeRun !== null && ["queued", "running"].includes(activeRun.status);
+  const mandateFlowUnavailable =
+    system?.mandateFlowEnabled === true && !system.mandateFlowReady;
 
   const refreshAgents = useCallback(async () => {
     const { agents: next } = await api.listAgents();
@@ -74,6 +288,35 @@ export default function App() {
     const result = await api.messages(agentId);
     if (mountedRef.current && selectedIdRef.current === agentId) {
       setMessages(result.messages);
+    }
+  }, []);
+
+  const refreshEvidence = useCallback(async (runId: string, agentId: string) => {
+    setEvidenceLoading(true);
+    setEvidenceError(null);
+    try {
+      const result = await api.mandateFlowEvidence(runId);
+      if (mountedRef.current && selectedIdRef.current === agentId) {
+        setEvidence(result.evidence);
+      }
+    } catch (reason) {
+      if (!mountedRef.current || selectedIdRef.current !== agentId) return;
+      if (reason instanceof ApiError && reason.status === 404) {
+        setEvidence(null);
+        return;
+      }
+      if (reason instanceof ApiError && reason.status === 503) {
+        setSystem((current) =>
+          current ? { ...current, mandateFlowReady: false } : current,
+        );
+      }
+      setEvidenceError(
+        reason instanceof Error ? reason.message : "Evidence request failed",
+      );
+    } finally {
+      if (mountedRef.current && selectedIdRef.current === agentId) {
+        setEvidenceLoading(false);
+      }
     }
   }, []);
 
@@ -98,6 +341,8 @@ export default function App() {
 
   useEffect(() => {
     setActiveRun(null);
+    setEvidence(null);
+    setEvidenceError(null);
     setShowSettings(false);
     if (!selectedId) {
       setMessages([]);
@@ -108,6 +353,9 @@ export default function App() {
         if (selectedIdRef.current !== selectedId) return;
         const latest = result.runs[0] ?? null;
         setActiveRun(latest);
+        if (latest?.policyContextId) {
+          void refreshEvidence(latest.id, selectedId);
+        }
         if (latest && ["queued", "running"].includes(latest.status)) {
           void pollRun(latest.id, selectedId).catch((reason) =>
             setError(reason instanceof Error ? reason.message : String(reason)),
@@ -117,7 +365,7 @@ export default function App() {
       .catch((reason) =>
         setError(reason instanceof Error ? reason.message : String(reason)),
       );
-  }, [refreshMessages, selectedId]);
+  }, [refreshEvidence, refreshMessages, selectedId]);
 
   useEffect(() => {
     if (selected) {
@@ -208,8 +456,15 @@ export default function App() {
       while (mountedRef.current) {
         await new Promise((resolve) => window.setTimeout(resolve, 900));
         if (!mountedRef.current) return;
-        const result = await api.run(runId);
+        const [result, latestSystem] = await Promise.all([
+          api.run(runId),
+          api.system().catch(() => null),
+        ]);
+        if (latestSystem && mountedRef.current) setSystem(latestSystem);
         if (selectedIdRef.current === agentId) setActiveRun(result.run);
+        if (result.run.policyContextId) {
+          await refreshEvidence(runId, agentId);
+        }
         if (!["queued", "running"].includes(result.run.status)) {
           await Promise.all([refreshMessages(agentId), refreshAgents()]);
           return;
@@ -237,11 +492,50 @@ export default function App() {
           agent.id === selected.id ? { ...agent, status: "busy" } : agent,
         ),
       );
-      await pollRun(result.run.id, selected.id);
+      void pollRun(result.run.id, selected.id).catch((reason) =>
+        setError(reason instanceof Error ? reason.message : String(reason)),
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
-      setActiveRun(null);
+      if (reason instanceof ApiError && reason.status === 503) {
+        setSystem((current) =>
+          current ? { ...current, mandateFlowReady: false } : current,
+        );
+      }
       await refreshAgents();
+    }
+  };
+
+  const retryRun = async () => {
+    if (!selected || !activeRun || activeRun.status !== "completed") return;
+    setRetrying(true);
+    setError(null);
+    try {
+      const result = await api.retryRun(activeRun.id);
+      if (selectedIdRef.current === selected.id) {
+        setMessages((current) => [...current, result.message]);
+        setActiveRun(result.run);
+        setEvidence(null);
+        setEvidenceError(null);
+      }
+      setAgents((current) =>
+        current.map((agent) =>
+          agent.id === selected.id ? { ...agent, status: "busy" } : agent,
+        ),
+      );
+      void pollRun(result.run.id, selected.id).catch((reason) =>
+        setError(reason instanceof Error ? reason.message : String(reason)),
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      if (reason instanceof ApiError && reason.status === 503) {
+        setSystem((current) =>
+          current ? { ...current, mandateFlowReady: false } : current,
+        );
+      }
+      await refreshAgents();
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -385,6 +679,16 @@ export default function App() {
           </div>
         ) : null}
 
+        {mandateFlowUnavailable && (
+          <div className="config-banner mandateflow-banner" role="status">
+            <span>!</span>
+            <div>
+              <strong>MandateFlow Gateway unavailable</strong>
+              <p>New secure messages and Retry are paused until the Gateway restarts.</p>
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="error-banner" role="alert">
             <span>{error}</span>
@@ -477,6 +781,12 @@ export default function App() {
               </form>
             )}
 
+            <div
+              className={
+                "workbench " +
+                (system?.mandateFlowEnabled ? "" : "workbench-single")
+              }
+            >
             <section className="playground">
               <div className="playground-topbar">
                 <div>
@@ -502,7 +812,11 @@ export default function App() {
                     </p>
                     <div className="prompt-grid">
                       {starterPrompts.map((item) => (
-                        <button key={item} onClick={() => setPrompt(item)}>
+                        <button
+                          key={item}
+                          onClick={() => setPrompt(item)}
+                          disabled={mandateFlowUnavailable}
+                        >
                           <span>↗</span>
                           {item}
                         </button>
@@ -552,14 +866,17 @@ export default function App() {
                     }
                   }}
                   placeholder={
-                    selected.status === "stopped"
+                    mandateFlowUnavailable
+                      ? "MandateFlow Gateway is unavailable…"
+                      : selected.status === "stopped"
                       ? "Start this Agent to continue…"
                       : "Describe what you want the Agent to do…"
                   }
                   disabled={
+                    mandateFlowUnavailable ||
                     selected.status === "stopped" ||
                     selected.status === "busy" ||
-                    activeRun != null && ["queued", "running"].includes(activeRun.status)
+                    runIsActive
                   }
                   rows={3}
                 />
@@ -571,9 +888,10 @@ export default function App() {
                     className="send-button"
                     disabled={
                       !prompt.trim() ||
+                      mandateFlowUnavailable ||
                       selected.status === "stopped" ||
                       selected.status === "busy" ||
-                      (activeRun != null && ["queued", "running"].includes(activeRun.status))
+                      runIsActive
                     }
                     aria-label="Send message"
                   >
@@ -582,6 +900,25 @@ export default function App() {
                 </div>
               </form>
             </section>
+            {system?.mandateFlowEnabled && (
+              <MandateFlowPanel
+                run={activeRun}
+                evidence={evidence}
+                loading={evidenceLoading}
+                evidenceError={evidenceError}
+                ready={system.mandateFlowReady}
+                retrying={retrying}
+                retryDisabled={
+                  retrying ||
+                  mandateFlowUnavailable ||
+                  busy ||
+                  selected.status !== "ready" ||
+                  runIsActive
+                }
+                onRetry={() => void retryRun()}
+              />
+            )}
+            </div>
           </>
         ) : (
           <div className="no-agent">

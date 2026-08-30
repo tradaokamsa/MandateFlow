@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
+import { CAPABILITY_ENV, loadConfig } from "./config.js";
 import {
+  buildContainerEnvironment,
   buildContainerRunArgs,
   containerName,
 } from "./container-codex-runner.js";
@@ -17,19 +18,23 @@ describe("Container Codex runner", () => {
       CONTAINER_RUNTIME_IMAGE: "runtime:test",
       CONTAINER_USER: "501:20",
       RUNTIME_INSTANCE_ID: "test-instance",
+      MANDATEFLOW_CONTAINER_ADD_HOST: "host.docker.internal:host-gateway",
     });
+    const capability = "mfr1_" + "b".repeat(43);
     const args = buildContainerRunArgs(
       {
+        runId: "run/unsafe",
         agentId: "agent/unsafe",
         workspacePath: "/tmp/agent-workspace",
         prompt: "write a small program",
         threadId: null,
+        mandateFlowCapability: capability,
       },
       config,
     );
 
-    expect(containerName("agent/unsafe", "test-instance")).toBe(
-      "launchpad-test-instance-agent-unsafe",
+    expect(containerName("run/unsafe", "test-instance")).toBe(
+      "launchpad-test-instance-run-unsafe",
     );
     expect(args).toContain("runtime:test");
     expect(args).toContain("type=bind,src=/tmp/agent-workspace,dst=/workspace");
@@ -38,8 +43,16 @@ describe("Container Codex runner", () => {
     expect(args).toContain("workspace-write");
     expect(args).toContain("/workspace");
     expect(args).toContain("io.codejam.instance-id=test-instance");
+    expect(args).toContain("io.codejam.run-id=run/unsafe");
+    expect(args).toContain("io.codejam.agent-id=agent/unsafe");
+    expect(args).toContain("host.docker.internal:host-gateway");
+    expect(args).toContain(CAPABILITY_ENV);
     expect(args).toContain("keep-id");
     expect(args).not.toContain("secret-that-must-not-appear-in-argv");
+    expect(args).not.toContain(capability);
+    expect(buildContainerEnvironment(config, capability, {})[CAPABILITY_ENV]).toBe(
+      capability,
+    );
   });
 
   it("resumes a thread inside the mounted Runtime workspace", () => {
@@ -50,10 +63,12 @@ describe("Container Codex runner", () => {
     });
     const args = buildContainerRunArgs(
       {
+        runId: "run",
         agentId: "agent",
         workspacePath: "/tmp/workspace",
         prompt: "continue",
         threadId: "thread-123",
+        mandateFlowCapability: null,
       },
       config,
     );

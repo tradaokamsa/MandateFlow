@@ -10,6 +10,7 @@ runtime_apt_mirror="${CONTAINER_APT_MIRROR:-}"
 runtime_apt_security_mirror="${CONTAINER_APT_SECURITY_MIRROR:-}"
 runtime_apt_packages="${CONTAINER_RUNTIME_APT_PACKAGES:-ca-certificates git ripgrep}"
 codex_sandbox_mode="${CODEX_SANDBOX_MODE:-workspace-write}"
+server_pid=""
 
 log() {
   printf '[local-poc] %s\n' "$*" >&2
@@ -79,6 +80,11 @@ if (( node_major < 22 )); then
   log "Node.js 22+ is required; found $(node --version)."
   exit 2
 fi
+
+if [[ -z "${APP_AUTH_TOKEN:-}" ]]; then
+  APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
+fi
+export APP_AUTH_TOKEN
 
 engine="$(detect_engine)"
 log "Using $engine as the Agent Runtime engine."
@@ -153,7 +159,27 @@ export RUNTIME_PROVIDER=container
 export CONTAINER_ENGINE="$engine"
 export CONTAINER_RUNTIME_IMAGE="$runtime_image"
 
+if [[ "${MANDATEFLOW_ENABLED:-false}" == "true" ]]; then
+  export MANDATEFLOW_ENABLED=true
+  export MANDATEFLOW_MCP_BIND_HOST="${MANDATEFLOW_MCP_BIND_HOST:-0.0.0.0}"
+  export MANDATEFLOW_MCP_PORT="${MANDATEFLOW_MCP_PORT:-3001}"
+  if [[ "$(basename "$engine")" == "podman" ]]; then
+    runtime_mcp_host="host.containers.internal"
+  else
+    runtime_mcp_host="host.docker.internal"
+    if [[ "$(uname -s)" == "Linux" ]]; then
+      export MANDATEFLOW_CONTAINER_ADD_HOST="${MANDATEFLOW_CONTAINER_ADD_HOST:-host.docker.internal:host-gateway}"
+    fi
+  fi
+  export MANDATEFLOW_RUNTIME_MCP_URL="${MANDATEFLOW_RUNTIME_MCP_URL:-http://$runtime_mcp_host:$MANDATEFLOW_MCP_PORT}"
+fi
+
 cleanup() {
+  if [[ -n "$server_pid" ]] && kill -0 "$server_pid" >/dev/null 2>&1; then
+    log "Stopping the local control plane."
+    kill "$server_pid" >/dev/null 2>&1 || true
+    wait "$server_pid" >/dev/null 2>&1 || true
+  fi
   local container_ids
   container_ids="$($engine ps --all --quiet \
     --filter label=io.codejam.launchpad=agent-runtime \
@@ -173,5 +199,42 @@ cleanup
 log "Building the local Web and API."
 npm run build
 
+wait_for_health() {
+  local label="$1"
+  local url="$2"
+  for _attempt in $(seq 1 60); do
+    if node -e 'fetch(process.argv[1], { signal: AbortSignal.timeout(1000) }).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))' "$url"; then
+      return 0
+    fi
+    if ! kill -0 "$server_pid" >/dev/null 2>&1; then
+      log "$label stopped before becoming healthy."
+      return 1
+    fi
+    sleep 1
+  done
+  log "$label did not become healthy at $url."
+  return 1
+}
+
+log "Starting the local control plane."
+node apps/server/dist/index.js &
+server_pid="$!"
+
+wait_for_health "Browser API" "http://127.0.0.1:$PORT/api/health"
+if [[ "${MANDATEFLOW_ENABLED:-false}" == "true" ]]; then
+  wait_for_health "MandateFlow MCP Gateway" "http://127.0.0.1:$MANDATEFLOW_MCP_PORT/healthz"
+  runtime_health_args=()
+  if [[ -n "${MANDATEFLOW_CONTAINER_ADD_HOST:-}" ]]; then
+    runtime_health_args+=(--add-host "$MANDATEFLOW_CONTAINER_ADD_HOST")
+  fi
+  log "Checking MCP reachability from the Runtime image."
+  "$engine" run --rm \
+    "${runtime_health_args[@]}" \
+    "$runtime_image" \
+    node -e 'fetch(process.argv[1], { signal: AbortSignal.timeout(5000) }).then(async (response) => { if (!response.ok) throw new Error(await response.text()); }).catch((error) => { console.error(error.message); process.exit(1); })' \
+    "$MANDATEFLOW_RUNTIME_MCP_URL/healthz"
+fi
+
 log "Open http://localhost:$PORT"
-npm start
+log "Browser access token: $APP_AUTH_TOKEN"
+wait "$server_pid"

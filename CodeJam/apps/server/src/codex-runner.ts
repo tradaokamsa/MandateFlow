@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import type { AppConfig } from "./config.js";
+import { CAPABILITY_ENV, type AppConfig } from "./config.js";
 import { RunCancelledError } from "./errors.js";
+import { redactPersistedText } from "./mandateflow/crypto.js";
 import type {
   AgentRunner,
   RunUsage,
@@ -11,6 +12,38 @@ import type {
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+
+const INHERITED_ENVIRONMENT_NAMES = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "NODE_EXTRA_CA_CERTS",
+  "TERM",
+] as const;
+
+export function buildCodexEnvironment(
+  config: AppConfig,
+  capability: string | null,
+  inherited: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    CODEX_HOME: config.codexHome,
+    ARK_API_KEY: config.arkApiKey,
+    NO_COLOR: "1",
+  };
+  if (capability) environment[CAPABILITY_ENV] = capability;
+  for (const name of INHERITED_ENVIRONMENT_NAMES) {
+    if (inherited[name] !== undefined) environment[name] = inherited[name];
+  }
+  return environment;
+}
 
 export interface ParsedEvents {
   messages: string[];
@@ -105,7 +138,7 @@ export class CodexRunner implements AgentRunner {
     try {
       await execFileAsync(this.config.codexBin, ["--version"], {
         timeout: 5_000,
-        env: this.childEnvironment(),
+        env: buildCodexEnvironment(this.config, null),
       });
       return true;
     } catch {
@@ -113,8 +146,8 @@ export class CodexRunner implements AgentRunner {
     }
   }
 
-  async cancel(agentId: string): Promise<boolean> {
-    const active = this.active.get(agentId);
+  async cancel(runId: string): Promise<boolean> {
+    const active = this.active.get(runId);
     if (!active) {
       return false;
     }
@@ -125,14 +158,14 @@ export class CodexRunner implements AgentRunner {
   }
 
   async run(request: RunnerRequest): Promise<RunnerResult> {
-    if (this.active.has(request.agentId)) {
-      throw new Error("Agent already has an active Codex process");
+    if (this.active.has(request.runId)) {
+      throw new Error("Run already has an active Codex process");
     }
 
     const args = buildCodexArgs(request, this.config.codexSandboxMode);
     const child = spawn(this.config.codexBin, args, {
       cwd: request.workspacePath,
-      env: this.childEnvironment(),
+      env: buildCodexEnvironment(this.config, request.mandateFlowCapability),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const settled = new Promise<void>((resolve) => {
@@ -147,7 +180,7 @@ export class CodexRunner implements AgentRunner {
       settled,
       forceKillTimer: null as NodeJS.Timeout | null,
     };
-    this.active.set(request.agentId, active);
+    this.active.set(request.runId, active);
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -209,21 +242,27 @@ export class CodexRunner implements AgentRunner {
       }
       if (exitCode !== 0) {
         const detail = parsed.errors.at(-1) ?? stderr.trim() ?? "No error detail";
-        throw new Error("Codex exited with code " + exitCode + ": " + detail);
+        throw new Error(
+          "Codex exited with code " +
+            exitCode +
+            ": " +
+            redactPersistedText(detail, request.mandateFlowCapability),
+        );
       }
       const output = parsed.messages.at(-1)?.trim();
       if (!output) {
         throw new Error("Codex completed without an agent message");
       }
       return {
-        output,
+        output: redactPersistedText(output, request.mandateFlowCapability),
         threadId: parsed.threadId,
         usage: parsed.usage,
+        runtimeId: "local-process:" + (child.pid ?? "unknown"),
       };
     } finally {
       clearTimeout(timeout);
       if (active.forceKillTimer) clearTimeout(active.forceKillTimer);
-      this.active.delete(request.agentId);
+      this.active.delete(request.runId);
     }
   }
 
@@ -237,31 +276,5 @@ export class CodexRunner implements AgentRunner {
       active.forceKillTimer = setTimeout(() => active.child.kill("SIGKILL"), 3_000);
       active.forceKillTimer.unref();
     }
-  }
-
-  private childEnvironment(): NodeJS.ProcessEnv {
-    const inheritedNames = [
-      "PATH",
-      "HOME",
-      "TMPDIR",
-      "LANG",
-      "LC_ALL",
-      "SSL_CERT_FILE",
-      "SSL_CERT_DIR",
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "NO_PROXY",
-      "NODE_EXTRA_CA_CERTS",
-      "TERM",
-    ] as const;
-    const environment: NodeJS.ProcessEnv = {
-      CODEX_HOME: this.config.codexHome,
-      ARK_API_KEY: this.config.arkApiKey,
-      NO_COLOR: "1",
-    };
-    for (const name of inheritedNames) {
-      if (process.env[name] !== undefined) environment[name] = process.env[name];
-    }
-    return environment;
   }
 }

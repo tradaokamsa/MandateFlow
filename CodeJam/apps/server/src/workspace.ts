@@ -72,4 +72,8 @@ export class WorkspaceManager {
     await rename(agent.workspacePath, destination);
     return destination;
   }
+
+  async restoreArchive(agent: Agent, archivedPath: string): Promise<void> {
+    await rename(archivedPath, agent.workspacePath);
+  }
 }

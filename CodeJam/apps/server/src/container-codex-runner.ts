@@ -1,8 +1,9 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import type { AppConfig } from "./config.js";
+import { CAPABILITY_ENV, type AppConfig } from "./config.js";
 import { buildCodexArgs, parseCodexEventLine } from "./codex-runner.js";
 import { RunCancelledError } from "./errors.js";
+import { redactPersistedText } from "./mandateflow/crypto.js";
 import type {
   AgentRunner,
   RunUsage,
@@ -29,17 +30,40 @@ interface ParsedEvents {
   errors: string[];
 }
 
-export function containerName(agentId: string, instanceId = "default"): string {
+export function containerName(runId: string, instanceId = "default"): string {
   const safeInstance = instanceId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 32);
-  const safeAgent = agentId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 48);
-  return "launchpad-" + safeInstance + "-" + safeAgent;
+  const safeRun = runId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 48);
+  return "launchpad-" + safeInstance + "-" + safeRun;
+}
+
+export function buildContainerEnvironment(
+  config: AppConfig,
+  capability: string | null,
+  inherited: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    ARK_API_KEY: config.arkApiKey,
+    NO_COLOR: "1",
+  };
+  if (capability) environment[CAPABILITY_ENV] = capability;
+  for (const name of [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "XDG_RUNTIME_DIR",
+  ] as const) {
+    if (inherited[name] !== undefined) environment[name] = inherited[name];
+  }
+  return environment;
 }
 
 export function buildContainerRunArgs(
   request: RunnerRequest,
   config: AppConfig,
 ): string[] {
-  const name = containerName(request.agentId, config.runtimeInstanceId);
+  const name = containerName(request.runId, config.runtimeInstanceId);
   const engineName = config.containerEngine.split(/[\\/]/).at(-1)?.toLowerCase();
   return [
     "run",
@@ -52,8 +76,13 @@ export function buildContainerRunArgs(
     "--label",
     "io.codejam.agent-id=" + request.agentId,
     "--label",
+    "io.codejam.run-id=" + request.runId,
+    "--label",
     "io.codejam.instance-id=" + config.runtimeInstanceId,
     ...(engineName === "podman" ? ["--userns", "keep-id"] : []),
+    ...(config.mandateFlowContainerAddHost
+      ? ["--add-host", config.mandateFlowContainerAddHost]
+      : []),
     "--network",
     "bridge",
     "--security-opt",
@@ -70,6 +99,7 @@ export function buildContainerRunArgs(
     config.containerUser,
     "--env",
     "ARK_API_KEY",
+    ...(request.mandateFlowCapability ? ["--env", CAPABILITY_ENV] : []),
     "--env",
     "CODEX_HOME=/codex-home",
     "--env",
@@ -97,12 +127,12 @@ export class ContainerCodexRunner implements AgentRunner {
     try {
       await execFileAsync(this.config.containerEngine, ["version"], {
         timeout: 5_000,
-        env: this.childEnvironment(),
+        env: buildContainerEnvironment(this.config, null),
       });
       await execFileAsync(
         this.config.containerEngine,
         ["image", "inspect", this.config.containerRuntimeImage],
-        { timeout: 5_000, env: this.childEnvironment() },
+        { timeout: 5_000, env: buildContainerEnvironment(this.config, null) },
       );
       return true;
     } catch {
@@ -110,8 +140,8 @@ export class ContainerCodexRunner implements AgentRunner {
     }
   }
 
-  async cancel(agentId: string): Promise<boolean> {
-    const active = this.active.get(agentId);
+  async cancel(runId: string): Promise<boolean> {
+    const active = this.active.get(runId);
     if (!active) return false;
 
     active.cancelled = true;
@@ -125,7 +155,7 @@ export class ContainerCodexRunner implements AgentRunner {
       active.termination = execFileAsync(
         this.config.containerEngine,
         ["rm", "--force", active.containerName],
-        { timeout: 8_000, env: this.childEnvironment() },
+        { timeout: 8_000, env: buildContainerEnvironment(this.config, null) },
       )
         .then(() => undefined)
         .catch(() => {
@@ -138,8 +168,8 @@ export class ContainerCodexRunner implements AgentRunner {
   }
 
   async run(request: RunnerRequest): Promise<RunnerResult> {
-    if (this.active.has(request.agentId)) {
-      throw new Error("Agent already has an active Runtime container");
+    if (this.active.has(request.runId)) {
+      throw new Error("Run already has an active Runtime container");
     }
 
     const child = spawn(
@@ -147,7 +177,10 @@ export class ContainerCodexRunner implements AgentRunner {
       buildContainerRunArgs(request, this.config),
       {
         cwd: request.workspacePath,
-        env: this.childEnvironment(),
+        env: buildContainerEnvironment(
+          this.config,
+          request.mandateFlowCapability,
+        ),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -157,14 +190,14 @@ export class ContainerCodexRunner implements AgentRunner {
     });
     const active: ActiveContainer = {
       child,
-      containerName: containerName(request.agentId, this.config.runtimeInstanceId),
+      containerName: containerName(request.runId, this.config.runtimeInstanceId),
       cancelled: false,
       timedOut: false,
       outputExceeded: false,
       settled,
       termination: null,
     };
-    this.active.set(request.agentId, active);
+    this.active.set(request.runId, active);
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -223,33 +256,20 @@ export class ContainerCodexRunner implements AgentRunner {
             " Runtime exited with code " +
             exitCode +
             ": " +
-            detail,
+            redactPersistedText(detail, request.mandateFlowCapability),
         );
       }
       const output = parsed.messages.at(-1)?.trim();
       if (!output) throw new Error("Codex completed without an agent message");
-      return { output, threadId: parsed.threadId, usage: parsed.usage };
+      return {
+        output: redactPersistedText(output, request.mandateFlowCapability),
+        threadId: parsed.threadId,
+        usage: parsed.usage,
+        runtimeId: active.containerName,
+      };
     } finally {
       clearTimeout(timeout);
-      this.active.delete(request.agentId);
+      this.active.delete(request.runId);
     }
-  }
-
-  private childEnvironment(): NodeJS.ProcessEnv {
-    const environment: NodeJS.ProcessEnv = {
-      ARK_API_KEY: this.config.arkApiKey,
-      NO_COLOR: "1",
-    };
-    for (const name of [
-      "PATH",
-      "HOME",
-      "TMPDIR",
-      "LANG",
-      "LC_ALL",
-      "XDG_RUNTIME_DIR",
-    ] as const) {
-      if (process.env[name] !== undefined) environment[name] = process.env[name];
-    }
-    return environment;
   }
 }
