@@ -24,8 +24,9 @@ docker compose config
 ```
 
 Use `npm run test:server:watch` for the shortest feedback loop. `check:fast`
-omits production bundle builds and live Groq E2E; `check` remains the complete
-non-live gate.
+omits production bundle builds and live Groq E2E while still running
+TypeScript typechecks plus Go formatting, vet, and race tests; `check` remains
+the complete non-live gate.
 
 ## Pull requests
 
