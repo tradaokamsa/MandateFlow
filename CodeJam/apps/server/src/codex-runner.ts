@@ -1,8 +1,15 @@
 import { execFile } from "node:child_process";
-import { spawn, type ChildProcess } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessByStdio,
+} from "node:child_process";
+import type { Readable } from "node:stream";
 import { promisify } from "node:util";
 import type { AppConfig } from "./config.js";
 import { RunCancelledError } from "./errors.js";
+import { GroqResponsesProxy } from "./groq-responses.js";
+import { redactRuntimeText } from "./trace.js";
 import type {
   AgentRunner,
   RunUsage,
@@ -23,8 +30,15 @@ export function buildCodexArgs(
   request: RunnerRequest,
   sandboxMode: AppConfig["codexSandboxMode"],
   workspacePath = request.workspacePath,
+  modelProviderBaseUrl?: string,
 ): string[] {
   const args = [
+    ...(modelProviderBaseUrl
+      ? [
+          "--config",
+          "model_providers.groq.base_url=" + JSON.stringify(modelProviderBaseUrl),
+        ]
+      : []),
     "exec",
     "--json",
     "--sandbox",
@@ -129,12 +143,25 @@ export class CodexRunner implements AgentRunner {
       throw new Error("Run already has an active Codex process");
     }
 
-    const args = buildCodexArgs(request, this.config.codexSandboxMode);
-    const child = spawn(this.config.codexBin, args, {
-      cwd: request.workspacePath,
-      env: this.childEnvironment(request.mandateFlowCapability),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const proxy = new GroqResponsesProxy(this.config.groqBaseUrl);
+    let child: ChildProcessByStdio<null, Readable, Readable>;
+    try {
+      const proxyBaseUrl = await proxy.start();
+      const args = buildCodexArgs(
+        request,
+        this.config.codexSandboxMode,
+        request.workspacePath,
+        proxyBaseUrl,
+      );
+      child = spawn(this.config.codexBin, args, {
+        cwd: request.workspacePath,
+        env: this.childEnvironment(request.mandateFlowCapability),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      await proxy.close();
+      throw error;
+    }
     const settled = new Promise<void>((resolve) => {
       child.once("close", () => resolve());
       child.once("error", () => resolve());
@@ -172,7 +199,10 @@ export class CodexRunner implements AgentRunner {
         stdout = lines.pop() ?? "";
         for (const line of lines) {
           parseCodexEventLine(
-            redactRuntimeOutput(line, request.mandateFlowCapability),
+            redactRuntimeText(
+              redactRuntimeOutput(line, request.mandateFlowCapability),
+              this.config.groqApiKey,
+            ),
             parsed,
           );
         }
@@ -200,7 +230,10 @@ export class CodexRunner implements AgentRunner {
       });
       if (stdout.trim()) {
         parseCodexEventLine(
-          redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
+          redactRuntimeText(
+            redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
+            this.config.groqApiKey,
+          ),
           parsed,
         );
       }
@@ -216,11 +249,17 @@ export class CodexRunner implements AgentRunner {
       if (exitCode !== 0) {
         const detail =
           parsed.errors.at(-1) ??
-          redactRuntimeOutput(stderr.trim(), request.mandateFlowCapability) ??
+          redactRuntimeText(
+            redactRuntimeOutput(stderr.trim(), request.mandateFlowCapability),
+            this.config.groqApiKey,
+          ) ??
           "No error detail";
         throw new Error("Codex exited with code " + exitCode + ": " + detail);
       }
-      const output = parsed.messages.at(-1)?.trim();
+      const output = redactRuntimeText(
+        redactRuntimeOutput(parsed.messages.at(-1)?.trim() ?? "", request.mandateFlowCapability),
+        this.config.groqApiKey,
+      );
       if (!output) {
         throw new Error("Codex completed without an agent message");
       }
@@ -234,6 +273,7 @@ export class CodexRunner implements AgentRunner {
       clearTimeout(timeout);
       if (active.forceKillTimer) clearTimeout(active.forceKillTimer);
       this.active.delete(request.runId);
+      await proxy.close();
     }
   }
 
@@ -266,7 +306,7 @@ export class CodexRunner implements AgentRunner {
     ] as const;
     const environment: NodeJS.ProcessEnv = {
       CODEX_HOME: this.config.codexHome,
-      ARK_API_KEY: this.config.arkApiKey,
+      GROQ_API_KEY: this.config.groqApiKey,
       NO_COLOR: "1",
     };
     if (mandateFlowCapability) {

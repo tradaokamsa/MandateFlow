@@ -5,7 +5,8 @@ Use one of two Volcengine ECS paths:
 - Install and deploy to an existing Linux ECS instance.
 - Provision the complete network and ECS stack with Terraform.
 
-Both profiles require a Volcengine Ark API key and a Responses-capable endpoint.
+Both profiles require a Groq API key. The default Responses model is
+`openai/gpt-oss-120b`.
 
 ## Existing Linux ECS
 
@@ -95,8 +96,8 @@ Set these values in `.env.production`:
 
 ```dotenv
 PUBLIC_PORT=80
-ARK_API_KEY=your-ark-api-key
-ARK_MODEL=ep-your-endpoint-id
+GROQ_API_KEY=your-groq-api-key
+GROQ_MODEL=openai/gpt-oss-120b
 APP_AUTH_TOKEN=the-random-token-generated-above
 ```
 
@@ -123,7 +124,7 @@ Deploy updates with `git pull --ff-only`, then rerun the deployment script.
 
 - Allow TCP 80 only from the event network.
 - Allow TCP 22 only from administrator IP addresses.
-- Allow outbound HTTPS to Ark and package registries.
+- Allow outbound HTTPS to Groq and package registries.
 - Add HTTPS before using `APP_AUTH_TOKEN` across an untrusted network.
 
 Stop the application without deleting Agent data:
@@ -153,7 +154,7 @@ cp deploy/volcengine/terraform.tfvars.example \
   deploy/volcengine/terraform.tfvars
 ```
 
-Set `ARK_API_KEY` and `ARK_MODEL` in `.env.production`. Set the region, zone,
+Set `GROQ_API_KEY` in `.env.production`; `GROQ_MODEL` is optional. Set the region, zone,
 image, instance type, key pair, allowed CIDRs, and repository URL in
 `terraform.tfvars`.
 
@@ -186,9 +187,9 @@ terraform -chdir=deploy/volcengine destroy
 
 ## Secret handling
 
-- Ark keys configure model access; Volcengine account AK/SK configures
+- Groq keys configure model access; Volcengine account AK/SK configures
   Terraform. Never pass account AK/SK to an Agent Runtime.
 - `.env.production`, `terraform.tfvars`, and Terraform state must not be
   committed.
-- The POC stores the Ark key in Terraform user data and state. Production
+- The POC stores the Groq key in Terraform user data and state. Production
   deployments require managed secrets and an encrypted remote state backend.

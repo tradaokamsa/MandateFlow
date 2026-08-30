@@ -6,7 +6,7 @@ Use Node.js 22+ and a running Docker, Colima, or Podman engine:
 
 ```bash
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
-ARK_API_KEY=your-ark-api-key ARK_MODEL=ep-your-endpoint-id npm run poc
+GROQ_API_KEY=your-groq-api-key npm run poc
 ```
 
 Open <http://localhost:3000>, unlock with `APP_AUTH_TOKEN`, create an Agent, and
@@ -39,13 +39,13 @@ CRM method; only trusted transitive provenance changes the decision.
 
 ## Automated evidence
 
-Fast checks do not call Ark:
+Fast checks do not call Groq:
 
 ```bash
 npm run check
 ```
 
-Against an already running POC, run the actual Codex/Ark workflow explicitly:
+Against an already running POC, run the actual Codex/Groq workflow explicitly:
 
 ```bash
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e

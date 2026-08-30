@@ -2,7 +2,7 @@
 
 The submitted local profile runs React/Fastify plus a Go MandateFlow sidecar on
 macOS or Linux and starts every Codex turn in a disposable Docker, Colima, or
-Podman container. Only the Volcengine Ark model API is remote.
+Podman container. Only the Groq model API is remote.
 
 ## Start
 
@@ -10,11 +10,11 @@ Requirements:
 
 - Node.js 22+
 - Docker, Colima, or Podman
-- An Ark API key and Responses-capable endpoint
+- A Groq API key; `GROQ_MODEL` is optional
 
 ```bash
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
-ARK_API_KEY=your-ark-api-key ARK_MODEL=ep-your-endpoint-id npm run poc
+GROQ_API_KEY=your-groq-api-key npm run poc
 ```
 
 Open <http://localhost:3000> and unlock with `APP_AUTH_TOKEN`. Press `Ctrl+C` to
@@ -100,8 +100,7 @@ podman run --rm docker.io/library/alpine:3.20 echo PODMAN_OK
 ```bash
 CONTAINER_ENGINE=podman \
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
-ARK_API_KEY=your-ark-api-key \
-ARK_MODEL=ep-your-endpoint-id \
+GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
 
@@ -114,8 +113,7 @@ build.
 ```bash
 CONTAINER_RUNTIME_APT_PACKAGES='ca-certificates git ripgrep python3 build-essential' \
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
-ARK_API_KEY=your-ark-api-key \
-ARK_MODEL=ep-your-endpoint-id \
+GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
 
@@ -143,7 +141,7 @@ The system response must report `mandateFlowEnabled: true` and
 remain visible but new secure Runs and retries fail with `503`; no Runtime is
 started.
 
-Run the Ark-consuming acceptance check against an already running POC:
+Run the Groq-consuming acceptance check against an already running POC:
 
 ```bash
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e

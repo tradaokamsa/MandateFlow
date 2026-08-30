@@ -2,7 +2,7 @@
 
 A provenance-sensitive mandate gateway built into Agent Launchpad for TikTok
 TechJam 2026 Track 1. The baseline still provides Agent CRUD, a browser
-Playground, persistent workspaces, and Codex CLI backed by the Volcengine Ark
+Playground, persistent workspaces, and Codex CLI backed by the Groq
 Responses API. MandateFlow adds a Go reference monitor that stops forbidden
 cross-tool data flows before a protected operation runs.
 
@@ -43,7 +43,7 @@ Volcengine ECS.
 - Node.js 22+
 - npm 10+
 - Docker, Colima, or Podman
-- A Volcengine Ark API key and endpoint that supports the Responses API
+- A Groq API key; the model defaults to `openai/gpt-oss-120b`
 
 Codex CLI is included in the Runtime image and is not required on the host.
 
@@ -76,8 +76,7 @@ Skip this step when already working from the repository root.
 
 ```bash
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
-ARK_API_KEY=your-ark-api-key \
-ARK_MODEL=ep-your-endpoint-id \
+GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
 
@@ -134,8 +133,7 @@ Force Podman when multiple engines are installed:
 ```bash
 CONTAINER_ENGINE=podman \
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
-ARK_API_KEY=your-ark-api-key \
-ARK_MODEL=ep-your-endpoint-id \
+GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
 
@@ -159,8 +157,8 @@ Create and edit the configuration:
 Required values in `.env`:
 
 ```dotenv
-ARK_API_KEY=your-ark-api-key
-ARK_MODEL=ep-your-endpoint-id
+GROQ_API_KEY=your-groq-api-key
+GROQ_MODEL=openai/gpt-oss-120b
 APP_AUTH_TOKEN=replace-with-at-least-24-random-characters
 ```
 
@@ -221,9 +219,9 @@ cp deploy/volcengine/terraform.tfvars.example \
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ARK_API_KEY` | Required | Ark model API key. |
-| `ARK_MODEL` | Required | Responses-capable endpoint or model ID. |
-| `ARK_BASE_URL` | Beijing v3 endpoint | Ark OpenAI-compatible API URL. |
+| `GROQ_API_KEY` | Required | Groq API key. |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Responses-capable Groq model. |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Groq OpenAI-compatible API URL. |
 | `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
 | `MANDATEFLOW_ENABLED` | `false` | Enables fail-closed Run lifecycle integration. `npm run poc` sets it to `true`. |
 | `MANDATEFLOW_CONTROL_URL` | `http://127.0.0.1:3002` | Host-only Go lifecycle/evidence endpoint. |
@@ -245,7 +243,7 @@ flowchart LR
     Go --> SQLite["Go-owned SQLite"]
     API --> Container["Disposable Codex Runtime"]
     Container -->|per-Run bearer + MCP| Go
-    Container --> Ark["Volcengine Ark Responses API"]
+    Container --> Groq["Groq Responses API"]
     Go --> Fixtures["Protected Support / Payments / Cases / CRM fixtures"]
 ```
 
@@ -260,7 +258,7 @@ boundaries.
 
 ```bash
 npm run check
-APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e  # running POC; consumes Ark tokens
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e  # running POC; consumes Groq tokens
 terraform fmt -check -recursive deploy/volcengine
 docker compose config
 ```
