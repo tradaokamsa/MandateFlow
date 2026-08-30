@@ -5,13 +5,13 @@
 **Status:** implementation decision and three-day build plan  
 **Date:** 30 August 2026  
 **Concept:** [`MANDATEFLOW.md`](./MANDATEFLOW.md)  
-**Implementation target:** [`CodeJam/`](./CodeJam/)  
+**Workspace layout:** [`CodeJam/`](../CodeJam/) plus sibling [`middleware/mandateflow/`](../middleware/mandateflow/)
 **P0 profile:** the starter's local container Runtime; ECS is out of scope
 
-This file intentionally sits outside `CodeJam/`, as requested. It is therefore
-not tracked by the starter's inner Git repository. After the design is accepted,
-copy the final concept, implementation plan and diagram assets into
-`CodeJam/docs/` before submission.
+This file intentionally sits outside `CodeJam/`, as requested. The Go
+middleware also lives outside the starter at the sibling
+`middleware/mandateflow/` path. The CodeJam scripts resolve that path by
+default and accept `MANDATEFLOW_DIR` for an independently checked-out layout.
 
 ---
 
@@ -291,7 +291,7 @@ decision.
 P0 is intentionally smaller than a production authorization service:
 
 - one Go process;
-- one SQLite database with five domain tables;
+- one SQLite database with six domain tables (including owner-bound fixture resources);
 - five fixed MCP tools;
 - five control operations;
 - one root mandate template;
@@ -757,7 +757,7 @@ and continue on a possibly different pooled connection.
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
 PRAGMA synchronous = FULL;
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 ```
 
 WAL is unnecessary for the single-connection P0. SQLite gives atomic committed
@@ -766,11 +766,12 @@ this project makes no power-loss or corruption-recovery claim.
 
 | Table | P0 contents |
 | --- | --- |
-| `contexts` | ID, Agent ID, purpose, frozen mandate JSON/hash, policy JSON/hash/version, state, issue/expiry. |
+| `contexts` | ID, opaque mandate ID, Agent and owner principals, purpose, frozen mandate JSON/hash, policy JSON/hash/version, state, issue/expiry and revocation metadata. |
 | `runs` | Unique Run ID, context, Runtime instance, retry-of, immutable grant JSON/hash, capability digest, audience, state, issue/activation/expiry/terminal timestamps. |
 | `references` | Digest, context, kind, private target, effective-label JSON, optional parent digest, producing receipt, safe alias, expiry/state. |
 | `receipts` | Run/context/grant, tool tuple, static/flow/final decision, stage, outcome, downstream flag, rule/reason, caused-by IDs, safe aliases/summaries, context-counter before/after. |
 | `fixture_counters` | `(contextId, tool)` primary key and value. A `NEW` context begins at zero; Retry reuses it. |
+| `fixture_resources` | Typed protected fixtures keyed by tool and immutable demo owner; source references must match this owner before invocation. |
 
 Checked-in Go data supplies the static Support/Payment/Case/CRM demo records and
 policy template. `PRAGMA user_version` is sufficient for the P0 schema; add a

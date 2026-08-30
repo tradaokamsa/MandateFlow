@@ -1,8 +1,8 @@
 # Local POC
 
-The local profile runs the React/Fastify control plane on macOS or Linux and
-starts every Codex turn in a disposable Docker, Colima, or Podman container.
-Only the Volcengine Ark model API is remote.
+The submitted local profile runs React/Fastify plus a Go MandateFlow sidecar on
+macOS or Linux and starts every Codex turn in a disposable Docker, Colima, or
+Podman container. Only the Groq model API is remote.
 
 ## Start
 
@@ -10,14 +10,16 @@ Requirements:
 
 - Node.js 22+
 - Docker, Colima, or Podman
-- An Ark API key and Responses-capable endpoint
+- A Groq API key; `GROQ_MODEL` is optional
 
 ```bash
-ARK_API_KEY=your-ark-api-key ARK_MODEL=ep-your-endpoint-id npm run poc
+export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+GROQ_API_KEY=your-groq-api-key npm run poc
 ```
 
-Open <http://localhost:3000>. Press `Ctrl+C` to stop the server and remove this
-instance's remaining Runtime containers.
+Open <http://localhost:3000> and unlock with `APP_AUTH_TOKEN`. Press `Ctrl+C` to
+stop the server and remove this instance's remaining Runtime containers,
+MandateFlow sidecar, and private network.
 
 Force an engine with `CONTAINER_ENGINE=docker` or
 `CONTAINER_ENGINE=podman`. Colima uses the Docker CLI.
@@ -29,11 +31,21 @@ Persistent state defaults to:
 - macOS: `~/.volc-agent-launchpad/`
 - Linux: `.local/`
 
+MandateFlow stores its database at `data/mandateflow/mandateflow.db`. The Go
+process is the only application component that opens this database. Node's
+`launchpad.json` contains only safe foreign IDs and fingerprints.
+
 Set `LOCAL_POC_DATA_ROOT` to use another directory.
 
 Each turn mounts only the selected Agent workspace and Codex session directory.
 Default limits are 2 CPUs, 2 GiB memory, 256 processes, dropped capabilities,
 and `no-new-privileges`.
+
+The startup script creates an instance-specific bridge network. The Go control
+listener is published only on `127.0.0.1:3002`; the MCP listener is not
+published to the host and is reachable by Runtime containers only through the
+`mandateflow-gateway` network alias. Runtime containers receive the per-Run
+capability environment variable but not the Go control token or browser token.
 
 Codex requests `workspace-write`. If the Linux kernel lacks Landlock, startup
 warns and disables only the inner Codex sandbox. The outer container limits
@@ -87,8 +99,8 @@ podman run --rm docker.io/library/alpine:3.20 echo PODMAN_OK
 
 ```bash
 CONTAINER_ENGINE=podman \
-ARK_API_KEY=your-ark-api-key \
-ARK_MODEL=ep-your-endpoint-id \
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
+GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
 
@@ -100,8 +112,8 @@ build.
 
 ```bash
 CONTAINER_RUNTIME_APT_PACKAGES='ca-certificates git ripgrep python3 build-essential' \
-ARK_API_KEY=your-ark-api-key \
-ARK_MODEL=ep-your-endpoint-id \
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
+GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
 
@@ -123,6 +135,21 @@ docker info                       # Or: podman info
 docker image inspect volc-agent-runtime:local
 curl http://localhost:3000/api/system
 ```
+
+The system response must report `mandateFlowEnabled: true` and
+`mandateFlowReady: true`. If the Go sidecar is unavailable, Agent CRUD/history
+remain visible but new secure Runs and retries fail with `503`; no Runtime is
+started.
+
+Run the Groq-consuming acceptance check against an already running POC:
+
+```bash
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e
+```
+
+The check creates a dedicated Agent, validates the initial flow denial and
+counter proof, then retries the denied call with a fresh capability in the same
+policy context.
 
 If a bind mount is rejected, set `LOCAL_POC_DATA_ROOT` to a directory shared
 with the container VM. On Linux, the startup script automatically uses the host

@@ -1,0 +1,17 @@
+{
+  "id": "mixed-operations-flow",
+  "version": 1,
+  "purposeId": "MIXED_OPERATIONS_BRIEF",
+  "defaultEffect": "ALLOW_IF_STATIC_SCOPE",
+  "rules": [
+    {
+      "id": "NO_PAYMENT_REIDENTIFICATION",
+      "when": {
+        "anyAncestorClassification": "PAYMENT_AGGREGATE_ONLY",
+        "destinationTool": "crm.resolve_customer"
+      },
+      "effect": "DENY",
+      "safeAlternative": "payments.aggregate_failures"
+    }
+  ]
+}

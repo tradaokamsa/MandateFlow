@@ -2,7 +2,7 @@
   "name": "volc-agent-launchpad",
   "version": "1.0.0",
   "private": true,
-  "description": "A middleware-free Agent platform starter kit running Codex CLI locally or on Volcengine ECS.",
+  "description": "Agent Launchpad with the Go MandateFlow provenance-sensitive MCP reference monitor.",
   "type": "module",
   "workspaces": [
     "apps/*"
@@ -15,7 +15,14 @@
     "build": "npm run build -w @launchpad/web && npm run build -w @launchpad/server",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test -w @launchpad/server",
-    "check": "npm run typecheck && npm run test && npm run build",
+    "test:server": "npm run test -w @launchpad/server",
+    "test:server:watch": "npm run test:watch -w @launchpad/server",
+    "check:fast": "npm run typecheck && npm run test:server && MANDATEFLOW_REQUIRE_GO=1 npm run check:go",
+    "check:app": "npm run typecheck && npm run test && npm run build",
+    "check:mandateflow": "./scripts/check-mandateflow.sh",
+    "check:go": "./scripts/check-go.sh",
+    "check:mandateflow:e2e": "./scripts/check-mandateflow-e2e.sh",
+    "check": "npm run check:app && npm run check:go",
     "poc": "./scripts/start-local-poc.sh",
     "start": "npm run start -w @launchpad/server"
   },

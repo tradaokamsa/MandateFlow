@@ -10,7 +10,7 @@ if [[ -z "${VOLCENGINE_ACCESS_KEY:-}" || -z "${VOLCENGINE_SECRET_KEY:-}" ]]; the
 fi
 
 if [[ ! -f .env.production ]]; then
-  echo "Missing .env.production. Copy .env.example and fill the Ark values." >&2
+  echo "Missing .env.production. Copy .env.example and fill the Groq values." >&2
   exit 1
 fi
 
@@ -24,15 +24,15 @@ set -a
 source .env.production
 set +a
 
-if [[ "${ARK_API_KEY:-}" == "" || "${ARK_MODEL:-}" == "" || "${APP_AUTH_TOKEN:-}" == "" ]]; then
-  echo "ARK_API_KEY, ARK_MODEL and APP_AUTH_TOKEN are required in .env.production." >&2
+if [[ "${GROQ_API_KEY:-}" == "" || "${APP_AUTH_TOKEN:-}" == "" ]]; then
+  echo "GROQ_API_KEY and APP_AUTH_TOKEN are required in .env.production." >&2
   exit 1
 fi
 
-export TF_VAR_ark_api_key="$ARK_API_KEY"
+export TF_VAR_groq_api_key="$GROQ_API_KEY"
 export TF_VAR_app_auth_token="$APP_AUTH_TOKEN"
-export TF_VAR_ark_model="$ARK_MODEL"
-export TF_VAR_ark_base_url="${ARK_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}"
+export TF_VAR_groq_model="${GROQ_MODEL:-openai/gpt-oss-120b}"
+export TF_VAR_groq_base_url="${GROQ_BASE_URL:-https://api.groq.com/openai/v1}"
 
 terraform -chdir=deploy/volcengine init
 terraform -chdir=deploy/volcengine apply
