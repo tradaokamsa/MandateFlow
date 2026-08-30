@@ -257,11 +257,19 @@ boundaries.
 ## Validation
 
 ```bash
+npm run test:server
+npm run check:fast
 npm run check
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e  # running POC; consumes Groq tokens
 terraform fmt -check -recursive deploy/volcengine
 docker compose config
 ```
+
+Use `npm run test:server:watch` while iterating on the server. `check:fast`
+runs TypeScript typechecks, server tests, Go formatting, `go vet`, and race
+tests without production bundle builds, Docker image builds, or Groq requests.
+It requires a local Go 1.23+ toolchain. Keep `npm run check` as the complete
+local gate before opening a pull request.
 
 ## Documentation
 

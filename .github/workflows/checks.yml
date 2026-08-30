@@ -1,0 +1,44 @@
+name: Checks
+
+on:
+  push:
+    branches:
+      - main
+      - first-commit
+  pull_request:
+    branches:
+      - main
+      - first-commit
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Application and middleware checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: CodeJam
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: CodeJam/package-lock.json
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: middleware/mandateflow/go.mod
+          cache-dependency-path: middleware/mandateflow/go.sum
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run complete non-live checks
+        run: npm run check
