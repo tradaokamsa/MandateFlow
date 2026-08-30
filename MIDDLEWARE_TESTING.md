@@ -34,7 +34,8 @@ npm ci
 npm run check
 ```
 
-This runs type checking, server tests, production builds, and middleware tests.
+This runs TypeScript checks, server/web tests, production builds, and middleware
+tests.
 
 ## Containerized middleware test
 
@@ -49,17 +50,26 @@ docker build \
 
 Replace `docker` with `podman` if applicable.
 
-## Live end-to-end test
+## End-to-end test
 
-The E2E test consumes Groq model tokens and requires Docker, Colima, or Podman.
+The default E2E path is credential-free and requires Docker, Colima, or Podman
+only for the Go sidecar. It traverses the real Fastify → Streamable HTTP MCP →
+Go → SQLite → API path. Use the explicit `container` profile below when you
+want to rehearse the live Codex/Groq path.
 
 In terminal 1:
 
 ```bash
 cd CodeJam
 export APP_AUTH_TOKEN='mandateflow-local-e2e-token-2026'
-export GROQ_API_KEY='your-groq-api-key'
 npm run poc
+```
+
+For the optional live model profile, add:
+
+```bash
+export RUNTIME_PROVIDER=container
+export GROQ_API_KEY='your-groq-api-key'
 ```
 
 In terminal 2:
@@ -74,7 +84,9 @@ curl -fsS http://localhost:3002/healthz
 npm run check:mandateflow:e2e
 ```
 
-The E2E test validates the allow, provenance denial, safe recovery, and retry-continuity paths.
+The E2E test validates the Support allow, Payment provenance denial before CRM,
+unchanged CRM counter, aggregate and fresh Support recovery, retry continuity,
+and revoked-mandate reset into a fresh context.
 
 ## Related documentation
 

@@ -15,7 +15,7 @@
 | Domain / scope | Authoritative source | Source type | Reviewed date |
 |---|---|---|---|
 | Mandate and ownership model | `mandateflow_docs/MANDATEFLOW.md` | Product / security design | 2026-08-30 |
-| P1 hardening requirements | GitHub issue #5, `tradaokamsa/MandateFlow` | Product issue | 2026-08-30 |
+| P1 hardening requirements | GitHub issue #8, `tradaokamsa/MandateFlow` | Product issue | 2026-08-30 |
 | Agent lifecycle | `README.md` | Product documentation | 2026-08-30 |
 
 ## Visual contract
@@ -37,6 +37,8 @@
 | CRUD | `AgentService` and existing Playground controls | `apps/server/src/agent-service.ts` | return / stay | full-flow tests |
 | Destructive confirmation | App-owned modal dialog | `apps/web/src/App.tsx` | revoke / delete | keyboard + failure-path tests |
 | Status feedback | Inline `role=status` and `role=alert` regions | `apps/web/src/App.tsx` | success / warning / error | DOM-level test |
+| Proof console | `ProofPanel` plus pure receipt derivation | `apps/web/src/ProofPanel.tsx`, `proof.ts` | pending / verified | receipt-backed state tests |
+| Receipt detail | Native `details` disclosure | `apps/web/src/ReceiptCard.tsx` | compact / expanded / missing parent | redaction + causal-link tests |
 
 ## Component behavior
 
@@ -53,15 +55,19 @@
 |---|---|---|---|---|---|---|---|
 | Create Agent | Create Agent form | Disable submit | Selected Agent Playground | Agent appears in sidebar | Preserve form and show alert | Modal remains open on failure | `apps/web/src/App.tsx` |
 | Edit Agent | Settings form | Disable submit | Same Playground | Updated configuration | Preserve form and show alert | Keep settings open on failure | `apps/web/src/App.tsx` |
-| Revoke mandate | Mandate Summary action | App-owned confirmation, then disable action | Same Playground with evidence retained | Inline revoked/cancelled status | Keep summary and explain failure | Return focus to summary action | GitHub issue #5 |
-| New secure workflow | Explicit header action | Disable while busy | Same Playground with fresh prompt | Summary clears until new mandate is issued | Keep prior evidence until action succeeds | Focus remains in header | GitHub issue #5 |
+| Revoke mandate | Mandate Summary action | App-owned confirmation, then disable action | Same Playground with evidence retained | Inline revoked/cancelled status | Keep summary and explain failure | Return focus to summary action | GitHub issue #8 |
+| New secure workflow | Explicit header action | Disable while busy or an active Run exists | Same Playground with cleared thread association | Fresh-workflow status; proof returns to pending | Keep prior evidence until action succeeds | Focus remains in header | GitHub issue #8 |
 | Delete Agent | Delete action | Existing confirmation flow | Agent list | Agent removed and workspace archived | Show error | Focus moves to selected list item | `apps/web/src/App.tsx` |
 
 ## Navigation and responsive behavior
 
-- The dark sidebar becomes a horizontal Agent strip on narrow screens.
+- The dark sidebar becomes a compact header strip on narrow screens; the
+  accessible Agent switcher opens as a bounded dialog with a visible close action
+  and focus restoration.
 - Mandate metadata wraps from four columns to two; long principals use a truncated visible value with a full-value tooltip.
 - The Playground keeps evidence visible after cancellation or revocation.
+- The proof rows collapse from four columns to one without hiding their labels or
+  pending/verified state.
 
 ## Overlays and feedback
 
@@ -86,6 +92,9 @@
 
 - Permission UI strategy: disable Send and Retry after revocation and retain redacted evidence.
 - Disabled-state explanation: the summary states that the mandate is revoked and a New secure workflow is required.
+- Proof claims are derived only from API receipts: the policy rule, CRM counter,
+  downstream invocation state, context continuity, and causal parents are shown
+  as pending when evidence is absent rather than inferred from prompt text.
 
 ## Verification
 
