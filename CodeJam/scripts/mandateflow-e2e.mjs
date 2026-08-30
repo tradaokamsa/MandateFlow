@@ -6,8 +6,9 @@ const heroPrompt =
   "transform its subject reference with cases.lookup_subject, and resolve that Case " +
   "reference through CRM. Next, list Payment failures, transform one Payment reference " +
   "with the same Case tool, and attempt the same CRM resolution. If policy denies it, " +
-  "use payments.aggregate_failures and finish the brief. Report policy outcomes, not " +
-  "protected identifiers.";
+  "use payments.aggregate_failures, then fetch a fresh Support ticket, transform its " +
+  "reference, and resolve it through CRM. Finish the brief and report policy outcomes, " +
+  "not protected identifiers.";
 
 async function request(path, options = {}) {
   const response = await fetch(baseUrl + path, {
@@ -82,16 +83,42 @@ const safeRecovery = firstEvidence.receipts.find(
     receipt.decision === "ALLOW" &&
     receipt.outcome === "SUCCEEDED",
 );
+const denialIndex = firstEvidence.receipts.findIndex(
+  (receipt) => receipt.id === flowDenial?.id,
+);
+const freshSupportLookup = firstEvidence.receipts.find(
+  (receipt, index) =>
+    index > denialIndex &&
+    receipt.tool === "support.list_tickets" &&
+    receipt.decision === "ALLOW",
+);
+const freshSupportCase = firstEvidence.receipts.find(
+  (receipt, index) =>
+    index > firstEvidence.receipts.indexOf(freshSupportLookup) &&
+    receipt.tool === "cases.lookup_subject" &&
+    receipt.decision === "ALLOW",
+);
+const safeSupportRecovery = firstEvidence.receipts.find(
+  (receipt, index) =>
+    index > firstEvidence.receipts.indexOf(freshSupportCase) &&
+    receipt.tool === "crm.resolve_customer" &&
+    receipt.decision === "ALLOW" &&
+    receipt.outcome === "SUCCEEDED" &&
+    receipt.counterBefore === 1 &&
+    receipt.counterAfter === 2,
+);
 if (
   !supportAllow ||
   !safeRecovery ||
+  !safeSupportRecovery ||
   !flowDenial ||
+  flowDenial.ruleId !== "NO_PAYMENT_REIDENTIFICATION" ||
   flowDenial.causedByReceiptIds.length !== 2 ||
   flowDenial.downstreamInvoked ||
   flowDenial.counterBefore !== flowDenial.counterAfter ||
-  firstEvidence.crmCounter !== 1
+  firstEvidence.crmCounter !== 2
 ) {
-  throw new Error("Hero Run did not produce the expected pre-execution FLOW_DENIED receipt");
+	throw new Error("Hero Run did not produce the expected allow/deny/recovery receipt set");
 }
 
 const retried = await request(`/api/runs/${completed.id}/retry`, { method: "POST" });
@@ -122,6 +149,43 @@ if (
   throw new Error("Retry did not preserve context while replacing Run authority");
 }
 
+const mandate = (await request(`/api/agents/${agentId}/mandate`)).mandate;
+if (!mandate?.mandateId) {
+  throw new Error("Completed proof did not expose a revocable mandate");
+}
+const revoked = await request(`/api/mandates/${encodeURIComponent(mandate.mandateId)}/revoke`, {
+  method: "POST",
+});
+if (revoked.mandate?.status !== "REVOKED") {
+  throw new Error("Mandate revocation did not commit its terminal state");
+}
+await request(`/api/agents/${agentId}/new-demo-workflow`, { method: "POST" });
+const reset = await request(`/api/agents/${agentId}/messages`, {
+  method: "POST",
+  body: JSON.stringify({ content: heroPrompt }),
+});
+const resetCompleted = await waitForRun(reset.run.id);
+if (resetCompleted.status !== "completed") {
+  throw new Error(`Fresh workflow ended as ${resetCompleted.status}: ${resetCompleted.error ?? "unknown"}`);
+}
+const resetEvidence = (await request(`/api/runs/${resetCompleted.id}/evidence`)).evidence;
+const resetSupportAllow = resetEvidence.receipts.find(
+  (receipt) =>
+    receipt.runId === resetCompleted.id &&
+    receipt.tool === "crm.resolve_customer" &&
+    receipt.decision === "ALLOW" &&
+    receipt.counterBefore === 0 &&
+    receipt.counterAfter === 1,
+);
+if (
+  !resetSupportAllow ||
+  resetEvidence.policyContextId === firstEvidence.policyContextId ||
+  resetEvidence.runGrantId === firstEvidence.runGrantId ||
+  resetEvidence.crmCounter !== 2
+) {
+  throw new Error("New secure workflow did not create isolated authority and complete Support recovery");
+}
+
 process.stdout.write(
   JSON.stringify(
     {
@@ -132,6 +196,8 @@ process.stdout.write(
       crmCounter: retryEvidence.crmCounter,
       firstDenialReceiptId: flowDenial.id,
       retryDenialReceiptId: retryDenial.id,
+      resetRunId: resetCompleted.id,
+      resetPolicyContextId: resetEvidence.policyContextId,
     },
     null,
     2,

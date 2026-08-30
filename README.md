@@ -31,7 +31,7 @@ than three minutes of live interaction.
 - macOS or Linux
 - Node.js 22+ and npm 10+
 - Docker, Colima, or rootless Podman
-- A Groq API key for a Responses-capable model
+- A Groq API key only when using the live `container` Runtime profile
 
 ### Start the proof of concept
 
@@ -39,43 +39,114 @@ than three minutes of live interaction.
 git clone https://github.com/tradaokamsa/MandateFlow.git
 cd MandateFlow/CodeJam
 
-export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require(\"node:crypto\").randomBytes(24).toString(\"base64url\"))')"
-GROQ_API_KEY=your-groq-api-key npm run poc
+export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+npm run poc
 ```
 
 The launcher installs dependencies when needed, builds the Go sidecar and
-disposable Runtime image, creates a private instance network, and starts the
-production Web/API bundle at <http://localhost:3000>. Enter the generated
-`APP_AUTH_TOKEN` in the browser unlock screen. The script automatically selects
-Docker, Colima, or Podman; set `CONTAINER_ENGINE=podman` to force Podman.
+starts the credential-free deterministic fixture Runtime by default, creates an
+instance network, and starts the production Web/API bundle at
+<http://localhost:3000>. Enter the generated `APP_AUTH_TOKEN` in the browser
+unlock screen. The script automatically selects Docker, Colima, or Podman; set
+`CONTAINER_ENGINE=podman` to force Podman.
 
-### The three-minute scenario
+The fixture Runtime traverses the same Fastify → Go MCP → SQLite → UI/API path
+without a model credential. To rehearse with Codex and Groq instead, set
+`RUNTIME_PROVIDER=container GROQ_API_KEY=...` before `npm run poc`.
 
-1. Create an Agent in the browser and select **New secure workflow**.
-2. Run the first starter prompt:
+### Run it end to end
 
-   ```text
-   Run the MandateFlow verification workflow. First, list the open Support ticket,
-   transform its subject reference with cases.lookup_subject, and resolve that Case
-   reference through CRM. Next, list Payment failures, transform one Payment reference
-   with the same Case tool, and attempt the same CRM resolution. If policy denies it,
-   use payments.aggregate_failures and finish the brief. Report policy outcomes, not
-   protected identifiers.
-   ```
+1. Leave `npm run poc` running, open <http://localhost:3000>, and enter the
+   generated `APP_AUTH_TOKEN` in the unlock screen.
+2. Select **Create Agent**, enter any name/description/instructions, and create
+   the Agent. The default demo owner is `user-a`.
+3. Select **New secure workflow** so the run starts with a fresh mandate and
+   policy context.
+4. In the proof console, select **Run MandateFlow proof**. It runs the same
+   deterministic workflow as the first starter prompt below. Wait for the Run
+   to complete, then open the decision journal and expand the receipts.
+5. Select **Retry denied call** and show that the Payment-derived CRM call is
+   denied again with fresh Run authority but the same policy context and
+   lineage.
+6. Select **Revoke mandate**, confirm, then select **New secure workflow**.
+   Send and Retry are blocked while revoked; the next proof starts with a fresh
+   policy context and old references cannot cross into it.
 
-3. Open the Run's decision journal and show the contrast:
+If you want to run the prompt manually, use the first starter prompt:
 
-   | Flow | Expected result | Judge-visible proof |
-   | --- | --- | --- |
-   | `Support → Case → CRM` | `ALLOW` | CRM counter changes `0 → 1`. |
-   | `Payment → Case → CRM` | `FLOW_DENIED` | Denied at `PRE_EXECUTION`; CRM counter stays `1 → 1`; fixture is not invoked. |
-   | `Payment → aggregate` | `ALLOW` | Safe in-scope recovery completes the brief. |
-   | Retry the denied call | `FLOW_DENIED` | New Run, Runtime, grant, and capability; same policy context and lineage; denial remains. |
+```text
+Run the MandateFlow verification workflow. First, list the open Support ticket,
+transform its subject reference with cases.lookup_subject, and resolve that Case
+reference through CRM. Next, list Payment failures, transform one Payment reference
+with the same Case tool, and attempt the same CRM resolution. If policy denies it,
+use payments.aggregate_failures, then fetch a fresh Support ticket, transform
+it, and resolve it through CRM. Report policy outcomes, not protected
+identifiers.
+```
 
-The important comparison is deliberately narrow: the Agent, grant shape,
-intermediate `operations-case` type, and CRM method are the same. Only the
-trusted transitive provenance differs. The UI also exposes the redacted receipt
-timeline, mandate summary, and an explicit **Revoke mandate** control.
+### User flows for the demo
+
+The demo tells one compact story: MandateFlow lets an Agent follow trusted
+Support data, blocks the same-looking Payment data at the protected boundary,
+and still lets the Agent recover safely without exposing sensitive references.
+Open the completed Run's proof console and decision journal as you walk through
+these flows.
+
+#### Flow 1 — Establish a secure workflow
+
+Create an Agent, select **New secure workflow**, and point out the
+**MandateFlow ready** header and server-derived Mandate Summary. This establishes
+that the session has a fresh mandate and policy context before any protected
+tool is called.
+
+#### Flow 2 — Follow a trusted Support path
+
+Run **MandateFlow proof** and show `Support → Case → CRM` as `ALLOW`. The CRM
+counter moves from `0 → 1`, and the allowed receipt is marked `COMPLETED`.
+
+#### Flow 3 — Block unsafe re-identification
+
+The Agent uses the same public Case type and the same CRM method for a
+Payment-derived reference. Static scope is still `ALLOW`, but trusted
+provenance is `DENY`: rule `NO_PAYMENT_REIDENTIFICATION` blocks the call at
+`PRE_EXECUTION`, the outcome is `NOT_INVOKED`, and the CRM counter remains
+`1 → 1`. This is the key moment: the gateway stops the flow before the
+protected fixture runs.
+
+#### Flow 4 — Recover with the least privilege path
+
+Show `payments.aggregate_failures` succeeding as the safe alternative. The
+Agent then fetches a fresh Support ticket and completes a second CRM resolution;
+the counter moves from `1 → 2`. No Payment reference is re-identified.
+
+#### Flow 5 — Retry without inheriting trust
+
+Select **Retry denied call**. The retry has a new Run, Runtime, grant, and
+capability fingerprint, while preserving the policy context and Payment
+lineage. It is denied again without repeating the Payment or Case derivation.
+
+#### Flow 6 — Revoke and start clean
+
+Select **Revoke mandate**, confirm it, and show that Send and Retry are locked.
+Select **New secure workflow** to create a fresh policy context. The old
+redacted receipts remain useful evidence, but old references cannot cross into
+the new workflow.
+
+The memorable takeaway is: **same tool, same public type, different trusted
+provenance — different authorization outcome.**
+
+For a terminal-only acceptance check against an already running POC, open a
+second terminal, paste the same token, and run:
+
+```bash
+cd MandateFlow/CodeJam
+export APP_AUTH_TOKEN='paste-the-token-used-by-npm-run-poc'
+npm run check:mandateflow:e2e
+```
+
+When the walkthrough is finished, press `Ctrl+C` in the POC terminal. Temporary
+Runtime containers, the Go sidecar, and its private network are removed; Agent
+workspaces and the redacted journal remain on disk.
 
 For the exact acceptance walkthrough, see
 [CodeJam/docs/DEMO.md](CodeJam/docs/DEMO.md).
@@ -138,8 +209,10 @@ short version is:
 | Go sidecar + SQLite | Mandates, Run grants, capability digests, ownership-bound fixtures, reference ancestry, receipts, and counters. |
 | Gateway | The only enforcement point for the five protected MCP operations. |
 
-The local launcher gives each instance a private bridge network. The MCP port
-is not published to the host; the Go control listener is loopback-only. Each
+The local launcher gives each instance a private bridge network. In the live
+container profile the MCP port is private to that network; in the fixture
+profile it is published only on loopback so the Node fixture runner can cross
+the same HTTP boundary. The Go control listener is loopback-only. Each live
 Runtime mounts only its selected Agent workspace and private Codex home.
 
 Read the deeper boundary and lifecycle details in
@@ -167,7 +240,7 @@ middleware story. MandateFlow is intentionally deep rather than broad.
 Run from `CodeJam/`:
 
 ```bash
-# Fast local gate: TypeScript, server tests, gofmt, go vet, and race tests
+# Fast local gate: TypeScript, server/web tests, gofmt, go vet, and race tests
 npm run check:fast
 
 # Complete gate: fast checks plus production Web/API builds
@@ -176,13 +249,15 @@ npm run check
 # Focused Go middleware check
 npm run check:mandateflow
 
-# Against an already running POC; consumes Groq tokens
+# Against an already running credential-free POC
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e
 ```
 
 The E2E check prints the initial and retry Run IDs, shared policy-context ID,
-unchanged CRM counter, and both denial receipt IDs. It is separate from
-`npm run check` so ordinary verification does not require a model request.
+unchanged CRM counter, denial receipt IDs, and the fresh post-revocation
+context. It is separate from `npm run check` because it starts the local POC;
+the default fixture path does not require a model request. Set
+`RUNTIME_PROVIDER=container` to run the optional live Codex/Groq variant.
 
 ## Honest scope
 

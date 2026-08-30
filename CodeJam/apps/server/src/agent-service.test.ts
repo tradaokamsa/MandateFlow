@@ -49,6 +49,7 @@ afterEach(async () => {
 async function makeService(
   runner: AgentRunner = new FakeRunner(),
   mandateFlow: MandateFlowControl | null = null,
+  environment: Record<string, string> = {},
 ): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
@@ -67,6 +68,7 @@ async function makeService(
           APP_AUTH_TOKEN: "a-secure-local-test-token",
         }
       : {}),
+    ...environment,
   });
   const service = new AgentService(
     config,
@@ -117,6 +119,23 @@ describe("Agent lifecycle", () => {
     expect(system).not.toHaveProperty("arkConfigured");
   });
 
+  it("runs the credential-free fixture provider without requiring Groq", async () => {
+    const service = await makeService(new FakeRunner(), null, {
+      RUNTIME_PROVIDER: "fixture",
+      GROQ_API_KEY: "",
+    });
+    const system = await service.systemInfo();
+    expect(system).toMatchObject({
+      groqConfigured: false,
+      runtimeProvider: "fixture",
+      runtime: "Deterministic MandateFlow fixture Runtime",
+    });
+
+    const agent = await service.createAgent({ name: "Fixture Agent" });
+    const { run } = await service.sendMessage(agent.id, "run fixture proof");
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+  });
+
   it("atomically accepts only one concurrent run per Agent", async () => {
     let finish!: (result: RunnerResult) => void;
     const pending = new Promise<RunnerResult>((resolve) => {
@@ -165,6 +184,7 @@ describe("Agent lifecycle", () => {
     const { run } = await service.sendMessage(agent.id, "first");
 
     await expect(service.startAgent(agent.id)).rejects.toMatchObject({ statusCode: 409 });
+    await expect(service.newDemoWorkflow(agent.id)).rejects.toMatchObject({ statusCode: 409 });
     await expect(service.sendMessage(agent.id, "second")).rejects.toMatchObject({
       statusCode: 409,
     });
@@ -186,6 +206,9 @@ class FakeMandateFlow implements MandateFlowControl {
   hasRetryableDenial = true;
   evidenceRunStatus = "COMPLETED";
   revoked = false;
+  private workflowNumber = 0;
+  private currentContextId = "ctx-1";
+  private currentMandateId = "mnd-1";
 
   async ready(): Promise<boolean> {
     this.events.push("ready");
@@ -198,12 +221,21 @@ class FakeMandateFlow implements MandateFlowControl {
   ): Promise<MandatePrepareResult> {
     this.events.push("prepare:" + request.mode);
     this.prepared.push({ runId, request });
+    if (request.mode === "NEW") {
+      this.workflowNumber += 1;
+      this.currentContextId = "ctx-" + this.workflowNumber;
+      this.currentMandateId = "mnd-" + this.workflowNumber;
+      this.revoked = false;
+    }
     return {
       runGrantId: "grant-" + this.prepared.length,
-      policyContextId: request.mode === "NEW" ? "ctx-1" : (request.policyContextId ?? "ctx-1"),
-      grantFingerprint: "grant:12345678",
-      capabilityFingerprint: "cap:12345678",
-      mandateId: "mnd-1",
+      policyContextId:
+        request.mode === "NEW"
+          ? this.currentContextId
+          : (request.policyContextId ?? this.currentContextId),
+      grantFingerprint: "grant:1234567" + this.prepared.length,
+      capabilityFingerprint: "cap:1234567" + this.prepared.length,
+      mandateId: this.currentMandateId,
       ownerPrincipal: request.ownerPrincipal,
       agentPrincipal: "agent:" + request.agentId,
       issuedAt: new Date().toISOString(),
@@ -269,11 +301,11 @@ class FakeMandateFlow implements MandateFlowControl {
 
   async summary(): Promise<MandateSummary> {
     return {
-      mandateId: "mnd-1",
+      mandateId: this.currentMandateId,
       status: this.revoked ? "REVOKED" : "ACTIVE",
       ownerPrincipal: "user-a",
       agentPrincipal: "agent:secure",
-      policyContextId: "ctx-1",
+      policyContextId: this.currentContextId,
       purposeId: "MIXED_OPERATIONS_BRIEF",
       policyId: "mixed-operations-flow",
       policyVersion: 1,
@@ -462,5 +494,47 @@ describe("MandateFlow lifecycle", () => {
     expect(events.indexOf("cancel")).toBeGreaterThan(events.indexOf("revoked"));
     await expect.poll(() => service.getRun(run.id).status).toBe("cancelled");
     expect(service.getAgent(agent.id).status).toBe("ready");
+  });
+
+  it("resets a revoked workflow into fresh authority that can start again", async () => {
+    const requests: RunnerRequest[] = [];
+    const runner: AgentRunner = {
+      run: async (request) => {
+        requests.push(request);
+        return {
+          output: "secure result",
+          threadId: "thread-" + requests.length,
+          usage: null,
+          runtimeInstanceId: "runtime-" + requests.length,
+        };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    };
+    const mandateFlow = new FakeMandateFlow();
+    const service = await makeService(runner, mandateFlow);
+    const agent = await service.createAgent({ name: "Recovery Agent" });
+
+    const first = await service.sendMessage(agent.id, "run the protected proof");
+    await expect.poll(() => service.getRun(first.run.id).status).toBe("completed");
+    const firstAuthority = service.getRun(first.run.id);
+    expect(firstAuthority.policyContextId).toBe("ctx-1");
+
+    const revoked = await service.revokeMandate("mnd-1");
+    expect(revoked.mandate.status).toBe("REVOKED");
+
+    const reset = await service.newDemoWorkflow(agent.id);
+    expect(reset.activePolicyContextId).toBeNull();
+    expect(reset.codexThreadId).toBeNull();
+
+    const recovered = await service.sendMessage(agent.id, "run the support recovery flow");
+    await expect.poll(() => service.getRun(recovered.run.id).status).toBe("completed");
+    const recoveredAuthority = service.getRun(recovered.run.id);
+    expect(mandateFlow.prepared[1]?.request.mode).toBe("NEW");
+    expect(recoveredAuthority.policyContextId).toBe("ctx-2");
+    expect(recoveredAuthority.mandateId).toBe("mnd-2");
+    expect(recoveredAuthority.runGrantId).not.toBe(firstAuthority.runGrantId);
+    expect(recoveredAuthority.capabilityFingerprint).not.toBe(firstAuthority.capabilityFingerprint);
+    expect(requests).toHaveLength(2);
   });
 });

@@ -9,14 +9,17 @@ import type {
   DemoOwnerPrincipal,
   SystemInfo,
 } from "./types";
+import { ProofPanel } from "./ProofPanel";
+import { ReceiptCard } from "./ReceiptCard";
 
 const heroPrompt =
   "Run the MandateFlow verification workflow. First, list the open Support ticket, " +
   "transform its subject reference with cases.lookup_subject, and resolve that Case " +
   "reference through CRM. Next, list Payment failures, transform one Payment reference " +
   "with the same Case tool, and attempt the same CRM resolution. If policy denies it, " +
-  "use payments.aggregate_failures and finish the brief. Report policy outcomes, not " +
-  "protected identifiers.";
+  "use payments.aggregate_failures, then fetch a fresh Support ticket, transform its " +
+  "reference, and resolve it through CRM. Finish the brief and report policy outcomes, " +
+  "not protected identifiers.";
 
 const starterPrompts = [
   heroPrompt,
@@ -87,6 +90,10 @@ export default function App() {
   const [showRevokeConfirm, setShowRevokeConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [revokeNotice, setRevokeNotice] = useState<string | null>(null);
+  const [workflowNotice, setWorkflowNotice] = useState<string | null>(null);
+  const [expandedReceiptId, setExpandedReceiptId] = useState<string | null>(null);
+  const [showMobileAgents, setShowMobileAgents] = useState(false);
+  const [showAuthToken, setShowAuthToken] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
@@ -95,6 +102,9 @@ export default function App() {
   const confirmationDialog = useRef<HTMLElement>(null);
   const revokeTrigger = useRef<HTMLButtonElement>(null);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
+  const mobileMenuTrigger = useRef<HTMLButtonElement>(null);
+  const mobileSwitcher = useRef<HTMLElement>(null);
+  const wasMobileAgentsOpen = useRef(false);
   const wasRevokeConfirming = useRef(false);
   const wasDeleteConfirming = useRef(false);
   const selectedIdRef = useRef<string | null>(null);
@@ -108,6 +118,7 @@ export default function App() {
   );
   const hasRetryableDenial = Boolean(
     activeRun &&
+      !activeRun.retryOfRunId &&
       evidence?.receipts.some(
         (receipt) =>
           receipt.runId === activeRun.id &&
@@ -177,6 +188,9 @@ export default function App() {
     setEvidence(null);
     setMandate(null);
     setRevokeNotice(null);
+    setWorkflowNotice(null);
+    setExpandedReceiptId(null);
+    setShowMobileAgents(false);
     setShowSettings(false);
     if (!selectedId) {
       setMessages([]);
@@ -251,6 +265,38 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showDeleteConfirm, showRevokeConfirm]);
+
+  useEffect(() => {
+    if (!showMobileAgents) {
+      if (wasMobileAgentsOpen.current) mobileMenuTrigger.current?.focus();
+      wasMobileAgentsOpen.current = false;
+      return;
+    }
+    wasMobileAgentsOpen.current = true;
+    const dialog = mobileSwitcher.current;
+    const focusable = dialog?.querySelectorAll<HTMLElement>(
+      "button, input, select, textarea, [tabindex]:not([tabindex='-1'])",
+    );
+    focusable?.[0]?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowMobileAgents(false);
+        return;
+      }
+      if (event.key !== "Tab" || !focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showMobileAgents]);
 
   useEffect(() => {
     if (wasRevokeConfirming.current && !showRevokeConfirm) revokeTrigger.current?.focus();
@@ -356,7 +402,7 @@ export default function App() {
   };
 
   const retryRun = async () => {
-    if (!activeRun) return;
+    if (!activeRun || revokePending) return;
     setBusy(true);
     setError(null);
     try {
@@ -379,9 +425,10 @@ export default function App() {
   };
 
   const newDemoWorkflow = async () => {
-    if (!selected) return;
+    if (!selected || revokePending) return;
     setBusy(true);
     setError(null);
+    setWorkflowNotice(null);
     try {
       await api.newDemoWorkflow(selected.id);
       setActiveRun(null);
@@ -389,6 +436,9 @@ export default function App() {
       setMandate(null);
       setRevokeNotice(null);
       setPrompt(heroPrompt);
+      setWorkflowNotice(
+        "Fresh secure workflow ready. Run the proof to create new server-owned evidence.",
+      );
       await refreshAgents();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -427,29 +477,56 @@ export default function App() {
     }
   };
 
-  const sendMessage = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!selected || !prompt.trim()) return;
-    const content = prompt.trim();
+  const runPrompt = async (content: string) => {
+    if (
+      !selected ||
+      !content.trim() ||
+      selected.status === "stopped" ||
+      selected.status === "busy" ||
+      revokePending ||
+      activeRun != null && ["queued", "running"].includes(activeRun.status) ||
+      system?.mandateFlowEnabled === true && !system.mandateFlowReady ||
+      mandate?.status === "REVOKED"
+    ) return;
+    const agentId = selected.id;
+    const normalizedContent = content.trim();
     setPrompt("");
     setError(null);
+    setWorkflowNotice(null);
     try {
-      const result = await api.sendMessage(selected.id, content);
-      if (selectedIdRef.current === selected.id) {
+      const result = await api.sendMessage(agentId, normalizedContent);
+      if (selectedIdRef.current === agentId) {
         setMessages((current) => [...current, result.message]);
         setActiveRun(result.run);
       }
       setAgents((current) =>
         current.map((agent) =>
-          agent.id === selected.id ? { ...agent, status: "busy" } : agent,
+          agent.id === agentId ? { ...agent, status: "busy" } : agent,
         ),
       );
-      await pollRun(result.run.id, selected.id);
+      await pollRun(result.run.id, agentId);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setActiveRun(null);
       await refreshAgents();
     }
+  };
+
+  const sendMessage = async (event: React.FormEvent) => {
+    event.preventDefault();
+    await runPrompt(prompt);
+  };
+
+  const navigateToReceipt = (receiptId: string) => {
+    setExpandedReceiptId(receiptId);
+    window.requestAnimationFrame(() => {
+      document.getElementById("receipt-" + receiptId)?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+        block: "nearest",
+      });
+    });
   };
 
   const unlock = async (event: React.FormEvent) => {
@@ -496,14 +573,25 @@ export default function App() {
           {error && <div className="error-banner" role="alert">{error}</div>}
           <label>
             Access token
-            <input
-              autoFocus
-              type="password"
-              value={authInput}
-              onChange={(event) => setAuthInput(event.target.value)}
-              autoComplete="current-password"
-              required
-            />
+            <span className="secret-input">
+              <input
+                autoFocus
+                type={showAuthToken ? "text" : "password"}
+                value={authInput}
+                onChange={(event) => setAuthInput(event.target.value)}
+                autoComplete="current-password"
+                required
+              />
+              <button
+                type="button"
+                className="secret-toggle"
+                onClick={() => setShowAuthToken((visible) => !visible)}
+                aria-label={showAuthToken ? "Hide access token" : "Show access token"}
+                aria-pressed={showAuthToken}
+              >
+                {showAuthToken ? "Hide" : "Show"}
+              </button>
+            </span>
           </label>
           <button className="button button-primary" disabled={busy || !authInput.trim()}>
             {busy ? <Spinner /> : "Open MandateFlow"}
@@ -513,15 +601,35 @@ export default function App() {
     );
   }
 
+  const runtimeReady = Boolean(
+    system &&
+      system.codexAvailable &&
+      (system.runtimeProvider === "fixture" || system.groqConfigured) &&
+      (!system.mandateFlowEnabled || system.mandateFlowReady),
+  );
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
+        <button
+          type="button"
+          className="mobile-menu-button"
+          ref={mobileMenuTrigger}
+          onClick={() => setShowMobileAgents(true)}
+          aria-label="Open Agent switcher"
+          aria-expanded={showMobileAgents}
+          aria-controls="mobile-agent-switcher"
+        >
+          <span aria-hidden="true">☰</span>
+        </button>
         <div className="brand">
           <div className="brand-mark">M</div>
           <div>
             <strong>MandateFlow</strong>
             <span>
-              {system?.runtimeProvider === "container"
+              {system?.runtimeProvider === "fixture"
+                ? "Deterministic fixture · Go gateway"
+                : system?.runtimeProvider === "container"
                 ? "Local container · Codex CLI"
                 : "ECS / Docker · Codex CLI"}
             </span>
@@ -531,6 +639,7 @@ export default function App() {
         <button
           className="button button-primary create-button"
           onClick={() => {
+            setShowMobileAgents(false);
             setForm(emptyForm);
             setShowCreate(true);
           }}
@@ -547,7 +656,10 @@ export default function App() {
             <button
               className={"agent-card " + (agent.id === selectedId ? "selected" : "")}
               key={agent.id}
-              onClick={() => setSelectedId(agent.id)}
+              onClick={() => {
+                setSelectedId(agent.id);
+                setShowMobileAgents(false);
+              }}
             >
               <div className="agent-avatar">{agent.name.slice(0, 1).toUpperCase()}</div>
               <div className="agent-card-copy">
@@ -569,22 +681,24 @@ export default function App() {
           <span className="eyebrow">Runtime</span>
           <strong>{system?.runtime ?? "Checking…"}</strong>
           <span>
-            {system?.groqModel ?? "Groq model not configured"}
+            {system?.runtimeProvider === "fixture"
+              ? "No external model credential"
+              : system?.groqModel ?? "Groq model not configured"}
             {system?.containerEngine ? " · " + system.containerEngine : ""}
           </span>
         </div>
       </aside>
 
       <main className="main">
-        {!system?.groqConfigured ||
+        {((system?.runtimeProvider !== "fixture" && !system?.groqConfigured) ||
         !system?.codexAvailable ||
-        (system?.mandateFlowEnabled && !system.mandateFlowReady) ? (
+        (system?.mandateFlowEnabled && !system.mandateFlowReady)) ? (
           <div className="config-banner">
             <span>!</span>
             <div>
               <strong>Runtime configuration needed</strong>
               <p>
-                {!system?.groqConfigured
+                {system?.runtimeProvider !== "fixture" && !system?.groqConfigured
                   ? "Set GROQ_API_KEY in .env before using the Playground; GROQ_MODEL is optional."
                   : system?.mandateFlowEnabled && !system.mandateFlowReady
                     ? "The Go MandateFlow sidecar is unavailable. Secure Runs fail closed until it is ready."
@@ -618,7 +732,7 @@ export default function App() {
                   <button
                     className="button button-ghost"
                     onClick={newDemoWorkflow}
-                    disabled={busy || selected.status === "busy"}
+                    disabled={busy || revokePending || selected.status === "busy"}
                   >
                     New secure workflow
                   </button>
@@ -627,7 +741,7 @@ export default function App() {
                   <button
                     className="button button-primary"
                     onClick={retryRun}
-                    disabled={busy || selected.status === "busy" || !evidence || mandate?.status === "REVOKED"}
+                    disabled={busy || revokePending || selected.status === "busy" || !evidence || mandate?.status === "REVOKED"}
                   >
                     Retry denied call
                   </button>
@@ -635,14 +749,14 @@ export default function App() {
                 <button
                   className="button button-ghost"
                   onClick={() => setShowSettings((value) => !value)}
-                  disabled={busy || selected.status === "busy"}
+                  disabled={busy || revokePending || selected.status === "busy"}
                 >
                   Settings
                 </button>
                 <button
                   className="button button-ghost"
                   onClick={toggleAgent}
-                  disabled={busy}
+                  disabled={busy || revokePending}
                 >
                   {selected.status === "stopped" ? "Start" : "Stop"}
                 </button>
@@ -650,7 +764,7 @@ export default function App() {
                   className="button button-danger"
                   ref={deleteTrigger}
                   onClick={() => setShowDeleteConfirm(true)}
-                  disabled={busy || selected.status === "busy"}
+                  disabled={busy || revokePending || selected.status === "busy"}
                 >
                   Delete
                 </button>
@@ -733,6 +847,22 @@ export default function App() {
                 </div>
               </div>
 
+              <ProofPanel
+                evidence={evidence}
+                activeRun={activeRun}
+                busy={busy}
+                canRun={runtimeReady && !revokePending && selected.status !== "stopped" && mandate?.status !== "REVOKED"}
+                canRetry={hasRetryableDenial && !revokePending && Boolean(evidence) && mandate?.status !== "REVOKED"}
+                onRunProof={() => void runPrompt(heroPrompt)}
+                onRetry={() => void retryRun()}
+              />
+              {workflowNotice && (
+                <div className="workflow-status" role="status">
+                  <span aria-hidden="true">✓</span>
+                  <span>{workflowNotice}</span>
+                </div>
+              )}
+
               {system?.mandateFlowEnabled && mandate && (
                 <section className="mandate-summary" aria-labelledby="mandate-summary-title">
                   <div className="mandate-summary-heading">
@@ -811,35 +941,16 @@ export default function App() {
                           </span>
                         )}
                       </div>
-                      <div className="receipt-timeline">
-                        {evidence.receipts.slice(-8).map((receipt) => (
-                          <article
-                            className={
-                              "receipt-card receipt-" + receipt.decision.toLowerCase()
-                            }
+                      <div className="receipt-timeline" aria-label="Redacted decision receipts">
+                        {evidence.receipts.map((receipt) => (
+                          <ReceiptCard
                             key={receipt.id}
-                          >
-                            <div className="receipt-title">
-                              <strong>{receipt.tool}</strong>
-                              <span>{receipt.decision}</span>
-                            </div>
-                            <div className="receipt-decisions">
-                              <span>scope {receipt.staticScopeDecision}</span>
-                              <span>flow {receipt.provenanceDecision}</span>
-                              <span>{receipt.outcome}</span>
-                            </div>
-                            <p>{receipt.reason}</p>
-                            {receipt.tool === "crm.resolve_customer" && (
-                              <small>
-                                CRM counter {receipt.counterBefore} → {receipt.counterAfter} · downstream {receipt.downstreamInvoked ? "invoked" : "not invoked"}
-                              </small>
-                            )}
-                            {receipt.causedByReceiptIds.length > 0 && (
-                              <small>
-                                caused by {receipt.causedByReceiptIds.map(shortId).join(" → ")}
-                              </small>
-                            )}
-                          </article>
+                            receipt={receipt}
+                            receipts={evidence.receipts}
+                            expanded={expandedReceiptId === receipt.id}
+                            onToggle={setExpandedReceiptId}
+                            onNavigate={navigateToReceipt}
+                          />
                         ))}
                       </div>
                     </>
@@ -905,7 +1016,7 @@ export default function App() {
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
+                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                       event.preventDefault();
                       event.currentTarget.form?.requestSubmit();
                     }
@@ -918,6 +1029,7 @@ export default function App() {
                   disabled={
                     selected.status === "stopped" ||
                     selected.status === "busy" ||
+                    revokePending ||
                     (system?.mandateFlowEnabled === true && !system.mandateFlowReady) ||
                     activeRun != null && ["queued", "running"].includes(activeRun.status) ||
                     mandate?.status === "REVOKED"
@@ -934,6 +1046,7 @@ export default function App() {
                       !prompt.trim() ||
                       selected.status === "stopped" ||
                       selected.status === "busy" ||
+                      revokePending ||
                       (system?.mandateFlowEnabled === true && !system.mandateFlowReady) ||
                       (activeRun != null && ["queued", "running"].includes(activeRun.status)) ||
                       mandate?.status === "REVOKED"
@@ -950,8 +1063,12 @@ export default function App() {
           <div className="no-agent">
             <div className="no-agent-art">M</div>
             <span className="eyebrow">MandateFlow</span>
-            <h1>Your runtime is ready for an Agent.</h1>
-            <p>Create a workspace, give Codex a job, and continue the conversation here.</p>
+            <h1>{runtimeReady ? "Your workspace is ready." : "Finish runtime setup first."}</h1>
+            <p>
+              {runtimeReady
+                ? "Create an Agent, then run a live proof of server-owned provenance."
+                : "Resolve the runtime notice above before starting a secure Agent workflow."}
+            </p>
             <button
               className="button button-primary"
               onClick={() => {
@@ -964,6 +1081,72 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {showMobileAgents && (
+        <div
+          className="mobile-switcher-backdrop"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setShowMobileAgents(false);
+          }}
+        >
+          <section
+            className="mobile-switcher"
+            id="mobile-agent-switcher"
+            ref={mobileSwitcher}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-switcher-title"
+          >
+            <div className="mobile-switcher-heading">
+              <div>
+                <span className="eyebrow">Workspaces</span>
+                <h2 id="mobile-switcher-title">Switch Agent</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setShowMobileAgents(false)}
+                aria-label="Close Agent switcher"
+              >
+                ×
+              </button>
+            </div>
+            <nav className="mobile-agent-list" aria-label="Agent workspaces">
+              {agents.map((agent) => (
+                <button
+                  type="button"
+                  className={"mobile-agent-option " + (agent.id === selectedId ? "selected" : "")}
+                  key={agent.id}
+                  onClick={() => {
+                    setSelectedId(agent.id);
+                    setShowMobileAgents(false);
+                  }}
+                >
+                  <span className="agent-avatar">{agent.name.slice(0, 1).toUpperCase()}</span>
+                  <span>
+                    <strong>{agent.name}</strong>
+                    <small>{agent.description || "Coding Agent"}</small>
+                  </span>
+                  <span className={"mobile-agent-status mobile-status-" + agent.status}>
+                    {agent.status}
+                  </span>
+                </button>
+              ))}
+            </nav>
+            <button
+              type="button"
+              className="button button-primary mobile-create-agent"
+              onClick={() => {
+                setShowMobileAgents(false);
+                setForm(emptyForm);
+                setShowCreate(true);
+              }}
+            >
+              ＋ Create Agent
+            </button>
+          </section>
+        </div>
+      )}
 
       {showRevokeConfirm && mandate && (
         <div className="modal-backdrop" onMouseDown={() => setShowRevokeConfirm(false)}>

@@ -115,12 +115,61 @@ func TestAuthenticatedStreamableHTTPToolFlow(t *testing.T) {
 		t.Fatal("fake client authority/provenance fields were accepted")
 	}
 	denied := callTool(t, session, "crm.resolve_customer", map[string]any{"reference": derived.Reference.Reference})
-	if denied.Code != "FLOW_DENIED" || denied.OK {
+	if denied.Code != "FLOW_DENIED" || denied.OK || denied.RuleID == nil || *denied.RuleID != "NO_PAYMENT_REIDENTIFICATION" {
 		t.Fatalf("MCP flow was not denied: %+v", denied)
 	}
 }
 
-func activeService(t *testing.T) (*mandateflow.Service, string) {
+func TestToolsListIsFilteredButDirectCallsRemainReceiptBacked(t *testing.T) {
+	narrowPermission := []mandateflow.Permission{
+		{Tool: "support.list_tickets", Action: "read", ResourceKind: "support-ticket"},
+	}
+	service, bearer := activeService(t, narrowPermission)
+	handler := New(service)
+	endpoint := "http://mandateflow.test/mcp"
+	baseTransport := handlerTransport{handler: handler}
+	httpClient := &http.Client{Transport: bearerTransport{bearer: bearer, base: baseTransport}}
+	client := mcp.NewClient(&mcp.Implementation{Name: "mandateflow-discovery-test", Version: "v1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:   endpoint,
+		HTTPClient: httpClient,
+		MaxRetries: -1,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	discovered, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discovered.Tools) != 1 || discovered.Tools[0].Name != "support.list_tickets" {
+		t.Fatalf("tools/list exposed tools outside the grant: %+v", discovered.Tools)
+	}
+
+	denied := callTool(t, session, "crm.resolve_customer", map[string]any{
+		"reference": "ref1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	})
+	if denied.OK || denied.Code != "SCOPE_DENIED" || denied.RuleID != nil {
+		t.Fatalf("direct ungranted call did not produce a scope denial: %+v", denied)
+	}
+	evidence, err := service.Evidence(context.Background(), "run-mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt *mandateflow.ReceiptView
+	for index := range evidence.Receipts {
+		if evidence.Receipts[index].ID == denied.ReceiptID {
+			receipt = &evidence.Receipts[index]
+		}
+	}
+	if receipt == nil || receipt.Outcome != "NOT_INVOKED" || receipt.DownstreamInvoked || receipt.CounterBefore != 0 || receipt.CounterAfter != 0 {
+		t.Fatalf("scope denial was not persisted as pre-execution evidence: %+v", receipt)
+	}
+}
+
+func activeService(t *testing.T, requested ...[]mandateflow.Permission) (*mandateflow.Service, string) {
 	t.Helper()
 	policy, err := mandateflow.ParsePolicy([]byte(policyFixture))
 	if err != nil {
@@ -138,12 +187,16 @@ func activeService(t *testing.T) (*mandateflow.Service, string) {
 	}
 	bearer := "mfr1_" + base64.RawURLEncoding.EncodeToString(randomValue)
 	digest := sha256.Sum256([]byte(bearer))
+	permissions := mandateflow.PlatformPermissions()
+	if len(requested) > 0 {
+		permissions = requested[0]
+	}
 	_, err = service.Prepare(context.Background(), "run-mcp", mandateflow.PrepareRequest{
 		AgentID:              "agent-mcp",
 		RuntimeInstanceID:    "runtime-mcp",
 		Mode:                 mandateflow.PrepareNew,
 		MandateTemplateID:    mandateflow.MandateTemplateID,
-		RequestedPermissions: mandateflow.PlatformPermissions(),
+		RequestedPermissions: permissions,
 		CapabilitySHA256:     base64.RawURLEncoding.EncodeToString(digest[:]),
 	})
 	if err != nil {

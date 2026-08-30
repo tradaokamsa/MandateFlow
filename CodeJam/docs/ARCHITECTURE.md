@@ -1,8 +1,10 @@
 # Architecture
 
 MandateFlow keeps the starter's browser, Fastify orchestration, workspaces,
-Codex Runtime, and Groq inference path. A separate Go process is the reference
-monitor for five protected MCP operations.
+Codex Runtime, and optional Groq inference path. A separate Go process is the
+reference monitor for five protected MCP operations. The local POC also has a
+credential-free deterministic fixture Runner that calls the same MCP endpoint
+from Node for judge-ready repeatability.
 
 ```mermaid
 flowchart LR
@@ -13,8 +15,10 @@ flowchart LR
     Gateway --> GoStore["Go-owned SQLite<br/>contexts · runs · references · receipts · counters"]
     Service --> Runner["ContainerCodexRunner"]
     Runner --> Runtime["Disposable Codex Runtime"]
-    Runtime --> Groq["Groq Responses API"]
+    Runtime --> Groq["Groq Responses API<br/>(optional live profile)"]
     Runtime -->|Streamable HTTP MCP<br/>per-Run bearer| Gateway
+    Service --> Fixture["Deterministic fixture Runner"]
+    Fixture -->|Streamable HTTP MCP<br/>per-Run bearer| Gateway
     Gateway --> Fixtures["Embedded protected fixtures<br/>Support · Payments · Cases · CRM"]
 ```
 
@@ -82,12 +86,13 @@ counters. Missing or invalid authentication receives one generic HTTP `401`.
 
 ## Network boundary
 
-The local launcher creates an instance-specific private bridge network. Runtime
-containers and the sidecar join it; MCP is reachable through
-`http://mandateflow-gateway:3001/mcp`. The MCP port is not host-published. The
-control listener is published only on loopback port 3002 and requires a separate
-boot bearer. Runtime containers receive neither the control bearer nor
-`APP_AUTH_TOKEN`.
+The local launcher creates an instance-specific private bridge network. Live
+Runtime containers and the sidecar join it; MCP is reachable through
+`http://mandateflow-gateway:3001/mcp` and is not host-published. The fixture
+profile publishes MCP only on a loopback host port so the Node Runner can cross
+the same HTTP boundary. The control listener is published only on loopback port
+3002 and requires a separate boot bearer. Live Runtime containers receive
+neither the control bearer nor `APP_AUTH_TOKEN`.
 
 This is a single-host POC boundary, not hardened multi-tenant isolation. It does
 not protect raw values copied into unprotected files/text/network paths, prevent
@@ -97,6 +102,7 @@ active-Runtime bearer theft, or provide exactly-once execution.
 
 | Profile | MandateFlow status |
 | --- | --- |
-| `npm run poc` local containers | Submitted P0; Go sidecar and private network enabled |
+| `npm run poc` local fixture | Submitted P0; Go sidecar, SQLite and credential-free MCP proof enabled |
+| `npm run poc` with `RUNTIME_PROVIDER=container` | Optional live Codex/Groq profile; Go sidecar and private Runtime network enabled |
 | Local development | Baseline by default; enable only with a manually started sidecar |
 | Docker Compose / ECS | Starter baseline only; production sidecar deployment is P1 |
