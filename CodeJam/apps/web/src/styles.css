@@ -618,6 +618,12 @@ textarea:focus {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
+.playground-context {
+  min-height: 0;
+  max-height: min(34vh, 300px);
+  overflow-y: auto;
+}
+
 .playground-topbar {
   min-height: 70px;
   padding: 17px 22px;
@@ -1026,6 +1032,74 @@ textarea:focus {
   line-height: 1.65;
 }
 
+.message-body > :first-child {
+  margin-top: 0;
+}
+
+.message-body > :last-child {
+  margin-bottom: 0;
+}
+
+.message-body p,
+.message-body ul,
+.message-body ol,
+.message-body pre,
+.message-body blockquote {
+  margin: 0 0 0.8em;
+}
+
+.message-body ul,
+.message-body ol {
+  padding-left: 1.5em;
+}
+
+.message-body ul {
+  list-style: disc;
+}
+
+.message-body ol {
+  list-style: decimal;
+}
+
+.message-body li + li {
+  margin-top: 0.25em;
+}
+
+.message-body code {
+  border-radius: 4px;
+  padding: 0.12em 0.35em;
+  background: #eeece6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+}
+
+.message-body pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #dedcd3;
+  border-radius: 9px;
+  padding: 10px 12px;
+  background: #f3f1eb;
+  white-space: pre;
+}
+
+.message-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.message-body blockquote {
+  border-left: 3px solid #cfc6f6;
+  padding-left: 11px;
+  color: #686760;
+}
+
+.message-body a {
+  color: var(--purple-dark);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .message-user {
   margin-left: 22%;
 }
@@ -1045,6 +1119,7 @@ textarea:focus {
 .message-assistant .message-body {
   padding-left: 14px;
   border-left: 2px solid #8a76e7;
+  white-space: normal;
 }
 
 .thinking {
