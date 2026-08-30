@@ -12,6 +12,7 @@ const (
 	CodeScopeDenied      ErrorCode = "SCOPE_DENIED"
 	CodeFlowDenied       ErrorCode = "FLOW_DENIED"
 	CodeInvalidReference ErrorCode = "INVALID_REFERENCE"
+	CodeOwnershipDenied  ErrorCode = "OWNERSHIP_DENIED"
 )
 
 type ServiceError struct {

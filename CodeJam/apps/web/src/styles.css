@@ -76,8 +76,24 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
+}
+
+select {
+  height: 40px;
+  width: 100%;
+  padding: 0 12px;
+  margin-top: 6px;
+}
+
+.field-help {
+  display: block;
+  margin-top: 5px;
+  color: #85837c;
+  font-size: 9px;
+  font-weight: 400;
 }
 
 button {
@@ -564,6 +580,10 @@ textarea {
   line-height: 1.55;
 }
 
+.resize-none {
+  resize: none;
+}
+
 input:focus,
 textarea:focus {
   border-color: #8a78e8;
@@ -641,6 +661,104 @@ textarea:focus {
   padding: 11px 16px 13px;
   border-bottom: 1px solid #ddd8f1;
   background: linear-gradient(105deg, #f6f4ff, #fbfaf7 72%);
+}
+
+.mandate-summary {
+  padding: 15px 16px;
+  border-bottom: 1px solid #ddd8f1;
+  background: #fffdf8;
+}
+
+.mandate-summary-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mandate-summary-heading h3 {
+  margin: 3px 0 0;
+  font-size: 14px;
+}
+
+.mandate-state {
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.mandate-state-active {
+  color: #236c51;
+  background: #e4f4ec;
+}
+
+.mandate-state-revoked {
+  color: #913e3e;
+  background: #fde9e6;
+}
+
+.mandate-state-closed {
+  color: #686760;
+  background: #eeece6;
+}
+
+.mandate-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 13px;
+}
+
+.mandate-summary-grid > div {
+  min-width: 0;
+}
+
+.mandate-summary-grid span,
+.mandate-summary-grid strong {
+  display: block;
+}
+
+.mandate-summary-grid span {
+  color: #85837c;
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.mandate-summary-grid strong {
+  margin-top: 3px;
+  overflow: hidden;
+  color: #35342f;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mandate-summary-grid .mandate-tools {
+  grid-column: span 2;
+}
+
+.mandate-tools strong {
+  white-space: normal;
+}
+
+.revoke-button {
+  margin-top: 13px;
+}
+
+.mandate-revoked-note,
+.mandate-status-message {
+  margin-top: 12px;
+  color: #913e3e;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.mandate-status-message {
+  color: #3f337b;
 }
 
 .mandate-heading,
@@ -1216,6 +1334,14 @@ textarea:focus {
 
   .playground-topbar {
     padding: 14px;
+  }
+
+  .mandate-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mandate-summary-grid .mandate-tools {
+    grid-column: span 2;
   }
 
   .session-info {
