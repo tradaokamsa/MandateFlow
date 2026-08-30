@@ -142,7 +142,7 @@ export interface SystemInfo {
   groqModel: string | null;
   codexAvailable: boolean;
   codexSandboxMode: string;
-  runtimeProvider: "local-process" | "container";
+  runtimeProvider: "local-process" | "container" | "fixture";
   containerEngine: string | null;
   runtime: string;
   mandateFlowEnabled: boolean;

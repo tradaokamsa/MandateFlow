@@ -4,8 +4,8 @@
 
 > Least privilege that survives tool chaining and disposable-Runtime retries.
 
-- **Status:** Go P0 and P1 authority hardening implemented; live pinned-Runtime acceptance remains an explicit pre-demo check
-- **Primary runtime:** Local disposable Codex container
+- **Status:** Go P0/P1 authority hardening and credential-free end-to-end proof implemented; live Codex acceptance remains an optional pre-demo check
+- **Primary runtime:** Deterministic fixture Runtime by default, or local disposable Codex container with Groq
 - **Primary boundary:** Protected MCP tool calls
 - **MVP scope:** One mixed-purpose workflow, typed protected references and one deterministic flow policy
 
@@ -57,7 +57,9 @@ control-plane transaction. The sidecar commits revocation and invalidates
 descendant capabilities before Node asks the active Runtime to stop. The
 Playground keeps the redacted evidence timeline visible, disables Send and
 Retry for the revoked mandate, and requires an explicit New secure workflow for
-fresh authority.
+fresh authority. That action clears the Node-side thread association; the next
+`NEW` Run creates a new Go policy context and mandate, and old references fail
+under the new capability.
 
 Runtime homes are isolated at `CODEX_HOME/agents/<immutable-agent-id>`. The
 selected directory is created and validated by the server, passed to both the
@@ -544,6 +546,12 @@ initialization, and binds any MCP session ID to the same capability and Run.
 result so Codex can recover without losing the transport session. A safe
 alternative is returned only when that tool is in the same Run grant.
 
+The complete five-tool registry remains installed inside the Gateway so a client
+that calls an operation directly cannot bypass the execution-time scope check.
+Only the authenticated `tools/list` response is filtered. A direct call outside
+the grant still creates a durable `SCOPE_DENIED` receipt with
+`downstreamInvoked: false`.
+
 ## Decision receipts
 
 Receipts are policy evidence, not hidden reasoning traces:
@@ -745,6 +753,12 @@ Preserve the existing Agent CRUD and Playground. Add only:
 - A receipt timeline containing static-scope decision, provenance decision,
   tool, rule, safe reason, parent links and `downstreamInvoked`.
 - A protected CRM invocation counter for demo evidence.
+- A live proof console with Support allow, Payment denial, fresh Support
+  recovery, retry persistence, actual rule IDs and truthful pending states.
+- Compact receipt expansion with redacted metadata and navigable causal parents;
+  missing parents are shown as unavailable rather than fabricated.
+- An explicit New secure workflow action after revocation that explains the
+  fresh-context boundary.
 
 A policy denial may still result in a completed Agent Run, so receipts must not
 be displayed only in the existing `Run failed` state.
@@ -792,8 +806,8 @@ global `process.env`. For Docker or Podman, process argv contains only
 `--env MANDATEFLOW_RUN_CAPABILITY`, while the value exists in that spawn's parent
 environment and is redacted from captured output.
 
-The first engineering gate is an end-to-end spike through the starter's actual
-pinned Codex `0.111.0` Runtime:
+The live-model engineering gate is an end-to-end spike through the starter's
+actual pinned Codex `0.111.0` Runtime:
 
 ```text
 Codex container
@@ -804,18 +818,22 @@ Codex container
     → protected test fixture
 ```
 
-This must succeed before schema or UI work begins. The spike verifies the real
-Streamable HTTP protocol path, the selected container engine's host route, and
-capability delivery by environment variable. Docker or another engine receives
-only the environment-variable name in argv, never the capability value.
+This verifies the real Streamable HTTP protocol path, the selected container
+engine's host route, and capability delivery by environment variable. Docker or
+another engine receives only the environment-variable name in argv, never the
+capability value. The default credential-free fixture Runner exercises the same
+MCP protocol path from Node and is the repeatable acceptance lane when no model
+credential is available.
 
-For the chosen local container profile:
+For the chosen local Runtime profile:
 
 - Keep the browser API on loopback.
-- Expose a separate capability-protected MCP listener reachable from the
-  container.
+- In the live `container` profile, expose a separate capability-protected MCP
+  listener reachable from the Runtime container.
+- In the `fixture` profile, expose MCP only on a loopback host port so Node can
+  cross the same HTTP boundary.
 - Join the instance-specific private bridge network and use the sidecar's
-  `mandateflow-gateway` alias.
+  `mandateflow-gateway` alias for live Runtime containers.
 - Give the Runtime no route or credential for the protected fixtures except the
   Gateway.
 - Treat Gateway unavailability as fatal for required protected tools.
@@ -831,18 +849,21 @@ For the chosen local container profile:
 | `apps/server/src/config.ts` | Generate the MCP configuration with only the Gateway URL and bearer environment-variable name. |
 | `apps/server/src/codex-runner.ts` | Add request-specific capability environment injection without logging the value. |
 | `apps/server/src/container-codex-runner.ts` | Key active processes, container names and cancellation by `runId`; inject the named environment variable, configure the tested host route and expose a Runtime/container identifier for demo evidence. |
+| `apps/server/src/fixture-runner.ts` | Provide the credential-free deterministic proof Runner over the same Streamable HTTP MCP boundary, including durable opaque retry state. |
 | `apps/server/src/mandateflow-client.ts` | Strict authenticated client for Go lifecycle and evidence control operations; contains no policy logic. |
 | `middleware/mandateflow/` (sibling to `CodeJam/`) | Go Streamable HTTP MCP gateway, immutable grants, provenance/reference monitor, embedded fixtures, receipts and five-table SQLite store. |
 | `middleware/mandateflow/config/mixed-operations.v1.json` | Startup-validated and context-pinned MVP rule. |
-| `apps/web/src/types.ts`, `api.ts`, `App.tsx` | Add safe receipt/retry types and calls, the seeded purpose summary, decision timeline and fixture counter. |
+| `apps/web/src/types.ts`, `api.ts`, `App.tsx` | Add safe receipt/retry types and calls, the seeded purpose summary, proof action, responsive workflow controls, decision timeline and fixture counter. |
+| `apps/web/src/ProofPanel.tsx`, `proof.ts`, `ReceiptCard.tsx` | Render receipt-derived proof rows, actual rule IDs, compact redacted detail, causal parent navigation and explicit unavailable states. |
 | `README.md`, `docs/DEMO.md` | Document fresh-start setup, the exact seeded prompt, selected container engine, expected counter transitions, limitations and rehearsal procedure. Keep the implementation blueprint and middleware in the parent workspace alongside the external `CodeJam/` checkout. |
 
 ## Automated verification
 
 ### Winning path
 
-- The pinned Codex container performs real MCP initialization, `tools/list` and
-  an authenticated `tools/call` through the Streamable HTTP Gateway.
+- The pinned Codex container, or the credential-free deterministic fixture
+  Runtime, performs real MCP initialization, `tools/list` and authenticated
+  `tools/call` requests through the Streamable HTTP Gateway.
 - Both Support and Payment references may pass through `cases.lookup_subject`.
 - Both derived Case references have the same public shape, and both CRM attempts
   use the same statically allowed method and argument kind.
@@ -853,6 +874,12 @@ For the chosen local container profile:
 - The denied request never enters CRM, so its trusted invocation counter remains
   unchanged.
 - Codex calls `payments.aggregate_failures` and completes both halves of the Run.
+- The fixture rehearsal completes the same allow/deny/aggregate/fresh-Support
+  choreography without a model credential and persists its opaque retry state
+  under the per-Agent Codex home.
+- After mandate revocation, New secure workflow clears the thread association;
+  the next Run receives a new policy context, grant and capability and old
+  references remain unusable.
 
 ### Identity and capability
 
@@ -985,7 +1012,7 @@ support unit tests, but it is not acceptable as the submitted end-to-end proof.
 | Day 1, first 2 hours | Complete the pinned-container integration spike. | Real authenticated `initialize`, `tools/list` and `tools/call` reach the Go Gateway through the private network alias. |
 | Day 1, remainder | Implement fixtures, store migration, immutable Run grants, hashed capabilities, opaque references, transitive lineage and versioned flow policy. | Backend tests prove Support allow, Payment denial through Case ancestry, pre-invocation enforcement and safe aggregate recovery. |
 | Day 2 | Integrate `AgentService` and both Runners, terminal capability invalidation, retry continuity, receipts and the minimal UI. | One browser-triggered Codex Run completes the mixed task, and a fresh Runtime retry retains the denial. |
-| Day 3 | Add direct-HTTP/bypass/outage/redaction tests, deterministic seed, documentation and repeated rehearsals. Add revocation only if P0 is stable. | `npm run check` passes; a clean setup reproduces the complete live scenario five times under three minutes. |
+| Day 3 | Add direct-HTTP/bypass/outage/redaction tests, deterministic seed, documentation and repeated rehearsals. Add revocation only if P0 is stable. | `npm run check` passes; a clean setup reproduces the complete fixture scenario five times under three minutes, with live-model rehearsal optional. |
 
 ## Three-minute demo script
 
@@ -993,16 +1020,19 @@ support unit tests, but it is not acceptable as the submitted end-to-end proof.
    statically permitted for this Run.
 2. **0:20–1:00:** Run Support → Case → CRM. Show `ALLOW` and the trusted CRM
    counter changing from `0` to `1`.
-3. **1:00–1:40:** Run Payment → the same Case tool → the same CRM method. Show
+3. **1:00–1:35:** Run Payment → the same Case tool → the same CRM method. Show
    static scope `ALLOW`, provenance `DENY`, the two-receipt ancestry and the CRM
    counter remaining `1`.
-4. **1:40–2:10:** Let Codex call the safe aggregate alternative and complete the
-   full operations brief.
-5. **2:10–2:45:** Retry in a new Runtime. Show new Run, Runtime, Run-grant and
+4. **1:35–2:05:** Let the Agent call the safe aggregate alternative, fetch a
+   fresh Support reference, and complete the second allowed CRM call. Show the
+   counter changing from `1` to `2`.
+5. **2:05–2:40:** Retry in a new Runtime. Show new Run, Runtime, Run-grant and
    capability fingerprints, the same policy-context ID, and the same denial;
-   the counter remains `1`.
-6. **2:45–3:00:** Show the compact bypass-test summary and state the boundary:
-   typed protected resources behind the Gateway, not general DLP.
+   the counter remains `2`.
+6. **2:40–3:00:** Revoke, start **New secure workflow**, and show the next Run
+   receive a fresh context. Use the automated check for the old-reference and
+   fresh-credential assertions; state the boundary: typed protected resources
+   behind the Gateway, not general DLP.
 
 ### Demo determinism
 
@@ -1010,8 +1040,8 @@ support unit tests, but it is not acceptable as the submitted end-to-end proof.
   with the documented demo command.
 - Store the exact prompt, untrusted runbook fragment and expected
   receipt/counter sequence in `docs/DEMO.md`.
-- Pre-build the container and pre-warm model access, while executing the actual
-  protected tool path live.
+- Pre-build the sidecar and, for the optional live profile, the Runtime image
+  and model access; execute the actual protected tool path live.
 - Do not depend on model improvisation for ordering: the seeded Agent instruction
   explicitly requests Support first, then Payment analysis through the legacy
   enrichment step, then completion through any permitted alternative.

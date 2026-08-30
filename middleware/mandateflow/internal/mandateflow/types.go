@@ -135,6 +135,7 @@ type ToolResult struct {
 	Code             string           `json:"code,omitempty"`
 	Message          string           `json:"message"`
 	ReceiptID        string           `json:"receiptId"`
+	RuleID           *string          `json:"ruleId,omitempty"`
 	Reference        *ReferenceResult `json:"reference,omitempty"`
 	SafeAlternatives []string         `json:"safeAlternatives,omitempty"`
 	Aggregate        *AggregateResult `json:"aggregate,omitempty"`
