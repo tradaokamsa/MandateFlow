@@ -16,7 +16,10 @@ import (
 const schema = `
 CREATE TABLE IF NOT EXISTS contexts (
   id TEXT PRIMARY KEY,
+  mandate_id TEXT NOT NULL UNIQUE,
   agent_id TEXT NOT NULL,
+  agent_principal TEXT NOT NULL,
+  owner_principal TEXT NOT NULL DEFAULT 'user-a',
   purpose_id TEXT NOT NULL,
   mandate_template_id TEXT NOT NULL,
   mandate_json TEXT NOT NULL,
@@ -26,7 +29,10 @@ CREATE TABLE IF NOT EXISTS contexts (
   policy_version INTEGER NOT NULL,
   state TEXT NOT NULL,
   issued_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT NULL,
+  revoked_by TEXT NULL,
+  revocation_reason TEXT NULL
 );
 CREATE INDEX IF NOT EXISTS contexts_agent_idx ON contexts(agent_id, state);
 
@@ -82,6 +88,8 @@ CREATE INDEX IF NOT EXISTS receipts_run_idx ON receipts(run_id, created_at, id);
 CREATE TABLE IF NOT EXISTS protected_references (
   reference_digest BLOB PRIMARY KEY,
   context_id TEXT NOT NULL REFERENCES contexts(id),
+  owner_principal TEXT NOT NULL DEFAULT 'user-a',
+  fixture_resource_id TEXT NULL,
   kind TEXT NOT NULL,
   private_target_id TEXT NOT NULL,
   effective_labels_json TEXT NOT NULL,
@@ -100,7 +108,18 @@ CREATE TABLE IF NOT EXISTS fixture_counters (
   PRIMARY KEY (context_id, tool)
 );
 
-PRAGMA user_version = 1;
+CREATE TABLE IF NOT EXISTS fixture_resources (
+  resource_id TEXT PRIMARY KEY,
+  tool TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  owner_principal TEXT NOT NULL,
+  private_target_id TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'ACTIVE'
+);
+CREATE INDEX IF NOT EXISTS fixture_resources_lookup_idx
+  ON fixture_resources(tool, kind, owner_principal, state);
+
+PRAGMA user_version = 2;
 `
 
 type Store struct {
@@ -150,11 +169,65 @@ func (s *Store) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("create sqlite schema: %w", err)
 	}
+	for _, column := range []struct {
+		table string
+		name  string
+		def   string
+	}{
+		{"contexts", "mandate_id", "TEXT"},
+		{"contexts", "agent_principal", "TEXT NOT NULL DEFAULT ''"},
+		{"contexts", "owner_principal", "TEXT NOT NULL DEFAULT 'user-a'"},
+		{"contexts", "revoked_at", "TEXT NULL"},
+		{"contexts", "revoked_by", "TEXT NULL"},
+		{"contexts", "revocation_reason", "TEXT NULL"},
+		{"protected_references", "owner_principal", "TEXT NOT NULL DEFAULT 'user-a'"},
+		{"protected_references", "fixture_resource_id", "TEXT NULL"},
+	} {
+		if err := s.addColumnIfMissing(ctx, column.table, column.name, column.def); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE contexts SET mandate_id = id WHERE mandate_id IS NULL OR mandate_id = '';
+UPDATE contexts SET agent_principal = 'agent:' || agent_id
+WHERE agent_principal IS NULL OR agent_principal = '';
+CREATE UNIQUE INDEX IF NOT EXISTS contexts_mandate_id_idx ON contexts(mandate_id);
+`); err != nil {
+		return fmt.Errorf("migrate mandate identity columns: %w", err)
+	}
+	if err := s.seedFixtureResources(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `
 UPDATE runs
 SET state = 'GATEWAY_RESTART', terminal_at = ?
 WHERE state IN ('PREPARED', 'ACTIVE')`, formatTime(time.Now().UTC())); err != nil {
 		return fmt.Errorf("recover interrupted runs: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) addColumnIfMissing(ctx context.Context, table, column, definition string) error {
+	_, err := s.db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+definition)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
+func (s *Store) seedFixtureResources(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT OR IGNORE INTO fixture_resources
+  (resource_id, tool, kind, owner_principal, private_target_id, state)
+VALUES
+  ('support-ticket:user-a', 'support.list_tickets', 'customer-subject', 'user-a', 'support:customer-001', 'ACTIVE'),
+  ('support-ticket:user-b', 'support.list_tickets', 'customer-subject', 'user-b', 'support:customer-002', 'ACTIVE'),
+  ('payment-failure:user-a', 'payments.list_failures', 'customer-subject', 'user-a', 'payment:account-777', 'ACTIVE'),
+  ('payment-failure:user-b', 'payments.list_failures', 'customer-subject', 'user-b', 'payment:account-888', 'ACTIVE'),
+  ('payment-summary:user-a', 'payments.aggregate_failures', 'payment-summary', 'user-a', 'payment-summary:user-a', 'ACTIVE'),
+  ('payment-summary:user-b', 'payments.aggregate_failures', 'payment-summary', 'user-b', 'payment-summary:user-b', 'ACTIVE')`)
+	if err != nil {
+		return fmt.Errorf("seed fixture resources: %w", err)
 	}
 	return nil
 }
@@ -185,7 +258,10 @@ func parseTime(value string) (time.Time, error) {
 
 type contextRow struct {
 	ID                string
+	MandateID         string
 	AgentID           string
+	AgentPrincipal    string
+	OwnerPrincipal    string
 	PurposeID         string
 	MandateTemplateID string
 	MandateJSON       string
@@ -196,6 +272,9 @@ type contextRow struct {
 	State             string
 	IssuedAt          time.Time
 	ExpiresAt         time.Time
+	RevokedAt         sql.NullString
+	RevokedBy         sql.NullString
+	RevocationReason  sql.NullString
 }
 
 type runRow struct {
@@ -277,12 +356,16 @@ func loadContext(ctx context.Context, queryer interface {
 	var row contextRow
 	var issuedAt, expiresAt string
 	err := queryer.QueryRowContext(ctx, `
-SELECT id, agent_id, purpose_id, mandate_template_id, mandate_json, mandate_hash,
-       policy_json, policy_hash, policy_version, state, issued_at, expires_at
+SELECT id, mandate_id, agent_id, agent_principal, owner_principal, purpose_id,
+       mandate_template_id, mandate_json, mandate_hash, policy_json, policy_hash,
+       policy_version, state, issued_at, expires_at, revoked_at, revoked_by,
+       revocation_reason
 FROM contexts WHERE id = ?`, contextID).Scan(
-		&row.ID, &row.AgentID, &row.PurposeID, &row.MandateTemplateID,
+		&row.ID, &row.MandateID, &row.AgentID, &row.AgentPrincipal, &row.OwnerPrincipal,
+		&row.PurposeID, &row.MandateTemplateID,
 		&row.MandateJSON, &row.MandateHash, &row.PolicyJSON, &row.PolicyHash,
-		&row.PolicyVersion, &row.State, &issuedAt, &expiresAt,
+		&row.PolicyVersion, &row.State, &issuedAt, &expiresAt, &row.RevokedAt,
+		&row.RevokedBy, &row.RevocationReason,
 	)
 	if err != nil {
 		return contextRow{}, err
@@ -301,6 +384,8 @@ FROM contexts WHERE id = ?`, contextID).Scan(
 type referenceRow struct {
 	Digest             []byte
 	ContextID          string
+	OwnerPrincipal     string
+	FixtureResourceID  sql.NullString
 	Kind               string
 	PrivateTargetID    string
 	EffectiveLabels    []string
@@ -315,11 +400,12 @@ func loadReference(ctx context.Context, tx *sql.Tx, digest []byte) (referenceRow
 	var row referenceRow
 	var labelsJSON, expiresAt string
 	err := tx.QueryRowContext(ctx, `
-SELECT reference_digest, context_id, kind, private_target_id,
-       effective_labels_json, parent_digest, producing_receipt_id,
+SELECT reference_digest, context_id, owner_principal, fixture_resource_id,
+       kind, private_target_id, effective_labels_json, parent_digest, producing_receipt_id,
        safe_alias, expires_at, state
 FROM protected_references WHERE reference_digest = ?`, digest).Scan(
-		&row.Digest, &row.ContextID, &row.Kind, &row.PrivateTargetID,
+		&row.Digest, &row.ContextID, &row.OwnerPrincipal, &row.FixtureResourceID,
+		&row.Kind, &row.PrivateTargetID,
 		&labelsJSON, &row.ParentDigest, &row.ProducingReceiptID,
 		&row.SafeAlias, &expiresAt, &row.State,
 	)
@@ -334,6 +420,77 @@ FROM protected_references WHERE reference_digest = ?`, digest).Scan(
 		return referenceRow{}, err
 	}
 	return row, nil
+}
+
+type fixtureResourceRow struct {
+	ID             string
+	Tool           string
+	Kind           string
+	OwnerPrincipal string
+	PrivateTarget  string
+	State          string
+}
+
+func loadFixtureResource(ctx context.Context, tx *sql.Tx, tool, kind, ownerPrincipal string) (fixtureResourceRow, error) {
+	var row fixtureResourceRow
+	err := tx.QueryRowContext(ctx, `
+SELECT resource_id, tool, kind, owner_principal, private_target_id, state
+FROM fixture_resources
+WHERE tool = ? AND kind = ? AND owner_principal = ? AND state = 'ACTIVE'
+ORDER BY resource_id LIMIT 1`, tool, kind, ownerPrincipal).Scan(
+		&row.ID, &row.Tool, &row.Kind, &row.OwnerPrincipal, &row.PrivateTarget, &row.State,
+	)
+	return row, err
+}
+
+func loadFixtureResourceByID(ctx context.Context, tx *sql.Tx, resourceID string) (fixtureResourceRow, error) {
+	var row fixtureResourceRow
+	err := tx.QueryRowContext(ctx, `
+SELECT resource_id, tool, kind, owner_principal, private_target_id, state
+FROM fixture_resources WHERE resource_id = ?`, resourceID).Scan(
+		&row.ID, &row.Tool, &row.Kind, &row.OwnerPrincipal, &row.PrivateTarget, &row.State,
+	)
+	return row, err
+}
+
+func loadContextByMandateID(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, mandateID string) (contextRow, error) {
+	var row contextRow
+	var issuedAt, expiresAt string
+	err := queryer.QueryRowContext(ctx, `
+SELECT id, mandate_id, agent_id, agent_principal, owner_principal, purpose_id,
+       mandate_template_id, mandate_json, mandate_hash, policy_json, policy_hash,
+       policy_version, state, issued_at, expires_at, revoked_at, revoked_by,
+       revocation_reason
+FROM contexts WHERE mandate_id = ?`, mandateID).Scan(
+		&row.ID, &row.MandateID, &row.AgentID, &row.AgentPrincipal, &row.OwnerPrincipal,
+		&row.PurposeID, &row.MandateTemplateID, &row.MandateJSON, &row.MandateHash,
+		&row.PolicyJSON, &row.PolicyHash, &row.PolicyVersion, &row.State, &issuedAt,
+		&expiresAt, &row.RevokedAt, &row.RevokedBy, &row.RevocationReason,
+	)
+	if err != nil {
+		return contextRow{}, err
+	}
+	row.IssuedAt, err = parseTime(issuedAt)
+	if err != nil {
+		return contextRow{}, err
+	}
+	row.ExpiresAt, err = parseTime(expiresAt)
+	if err != nil {
+		return contextRow{}, err
+	}
+	return row, nil
+}
+
+func loadBoundAgentOwner(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, agentID string) (string, error) {
+	var owner string
+	err := queryer.QueryRowContext(ctx, `
+SELECT owner_principal FROM contexts
+WHERE agent_id = ? ORDER BY issued_at, id LIMIT 1`, agentID).Scan(&owner)
+	return owner, err
 }
 
 func isNotFound(err error) bool {

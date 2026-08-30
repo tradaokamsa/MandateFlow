@@ -1,5 +1,6 @@
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type DemoOwnerPrincipal = "user-a" | "user-b";
 
 export interface Agent {
   id: string;
@@ -7,6 +8,8 @@ export interface Agent {
   description: string;
   instructions: string;
   status: AgentStatus;
+  ownerPrincipal: DemoOwnerPrincipal;
+  agentPrincipal: string;
   workspacePath: string;
   codexThreadId: string | null;
   activePolicyContextId: string | null;
@@ -40,11 +43,15 @@ export interface AgentRun {
   completedAt: string | null;
   policyContextId: string | null;
   runGrantId: string | null;
+  mandateId: string | null;
+  ownerPrincipal: DemoOwnerPrincipal | null;
+  agentPrincipal: string | null;
   retryOfRunId: string | null;
   mandateStatus:
     | "pending"
     | "active"
     | "finalizing"
+    | "revoked"
     | "closed"
     | "security-finalization-pending";
   capabilityFingerprint: string | null;
@@ -94,6 +101,39 @@ export interface MandateEvidence {
   capabilityFingerprint: string;
   crmCounter: number;
   receipts: PolicyReceipt[];
+  mandateId?: string;
+  mandateStatus?: string;
+  ownerPrincipal?: DemoOwnerPrincipal;
+  agentPrincipal?: string;
+  issuedAt?: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  revokedBy?: string;
+  revocationReason?: string;
+}
+
+export interface MandatePermission {
+  tool: string;
+  action: string;
+  resourceKind: string;
+}
+
+export interface MandateSummary {
+  mandateId: string;
+  status: "ACTIVE" | "REVOKED" | "CLOSED";
+  ownerPrincipal: DemoOwnerPrincipal;
+  agentPrincipal: string;
+  policyContextId: string;
+  purposeId: string;
+  policyId: string;
+  policyVersion: number;
+  grantedPermissions: MandatePermission[];
+  issuedAt: string;
+  expiresAt: string;
+  mandateFingerprint: string;
+  revokedAt?: string;
+  revokedBy?: string;
+  revocationReason?: string;
 }
 
 export interface SystemInfo {

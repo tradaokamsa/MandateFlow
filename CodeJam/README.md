@@ -36,6 +36,9 @@ Volcengine ECS.
 - Immutable Run grants, server-owned reference lineage, and a pinned flow policy
 - Go-owned SQLite receipts proving pre-execution allow/deny decisions
 - Explicit retry with fresh authority and durable provenance continuity
+- Bounded `user-a` / `user-b` demo ownership enforced by the Go sidecar
+- Durable mandate summaries, idempotent revocation, and active Runtime cancellation
+- Agent-specific Codex homes under `CODEX_HOME/agents/<agent-id>`
 - Docker and Terraform deployment paths for Volcengine ECS
 
 ## Requirements
@@ -109,10 +112,22 @@ In the Web UI:
    protected identifiers.
    ```
 
+The create form includes a bounded demo owner selector. `user-a` and `user-b`
+are fixed principals for exercising ownership checks; they are not real login
+identities. The owner is stored with the Agent and root mandate and cannot be
+changed through the edit form. The Go sidecar selects and checks the matching
+typed fixture before a protected operation runs.
+
 The decision journal should show Support → Case → CRM as `ALLOW`, Payment →
 Case → CRM as `FLOW_DENIED`, the denied CRM counter unchanged, and aggregate
 recovery succeeding. Use **Retry denied call** to prove that a new Runtime and
 capability cannot erase the Payment lineage.
+
+The selected Playground also shows a server-derived Mandate Summary. **Revoke
+mandate** first commits the root mandate's `REVOKED` state in the Go sidecar,
+then cancels the active Runtime. Revocation is idempotent; the evidence
+timeline remains visible, while Send and Retry stay disabled until **New secure
+workflow** explicitly creates a fresh mandate.
 
 ### 5. Stop and resume
 
@@ -193,6 +208,13 @@ APP_DATA_DIR=.data
 AGENT_WORKSPACE_ROOT=workspaces
 CODEX_HOME=codex-home
 ```
+
+Each Agent uses a private home at `CODEX_HOME/agents/<immutable-agent-id>`.
+The application creates that directory and writes its Codex configuration
+before a Run. Existing records are migrated to a fresh private home and their
+legacy shared-home thread is cleared; no legacy home is copied into a new
+Agent. The selected home is the only home passed to a local process or mounted
+into a Runtime container.
 
 ## Deployment
 

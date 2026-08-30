@@ -43,6 +43,11 @@ func (s *Service) Prepare(ctx context.Context, runID string, request PrepareRequ
 	if err := validatePrepare(runID, request); err != nil {
 		return PrepareResult{}, err
 	}
+	var err error
+	request.OwnerPrincipal, err = normalizeOwnerPrincipal(request.OwnerPrincipal)
+	if err != nil {
+		return PrepareResult{}, err
+	}
 	digest, err := base64.RawURLEncoding.DecodeString(request.CapabilitySHA256)
 	if err != nil || len(digest) != sha256.Size {
 		return PrepareResult{}, serviceError(CodeInvalidRequest, "capabilitySha256 must encode exactly 32 bytes")
@@ -61,13 +66,24 @@ func (s *Service) Prepare(ctx context.Context, runID string, request PrepareRequ
 		return PrepareResult{}, fmt.Errorf("begin prepare: %w", err)
 	}
 	defer tx.Rollback()
+	boundOwner, ownerErr := loadBoundAgentOwner(ctx, tx, request.AgentID)
+	if ownerErr != nil && !isNotFound(ownerErr) {
+		return PrepareResult{}, fmt.Errorf("load Agent owner binding: %w", ownerErr)
+	}
+	if boundOwner != "" && boundOwner != request.OwnerPrincipal {
+		return PrepareResult{}, serviceError(CodeConflict, "Agent owner binding cannot change")
+	}
 
 	existing, err := loadRunByID(ctx, tx, runID)
 	if err == nil {
 		if existing.PrepareHash != prepareHash || !equalBytes(existing.CapabilityDigest, digest) {
 			return PrepareResult{}, serviceError(CodeConflict, "Run ID was already prepared with different immutable input")
 		}
-		return prepareResultFromRun(existing), nil
+		policyContext, contextErr := loadContext(ctx, tx, existing.ContextID)
+		if contextErr != nil {
+			return PrepareResult{}, fmt.Errorf("load replay context: %w", contextErr)
+		}
+		return prepareResultFromRun(existing, policyContext), nil
 	}
 	if !isNotFound(err) {
 		return PrepareResult{}, fmt.Errorf("load prepared Run: %w", err)
@@ -121,6 +137,9 @@ WHERE agent_id = ? AND state = 'ACTIVE'
 		policyContext, err = loadContext(ctx, tx, original.ContextID)
 		if err != nil || policyContext.State != "ACTIVE" || now.After(policyContext.ExpiresAt) {
 			return PrepareResult{}, serviceError(CodeConflict, "retry policy context is not active")
+		}
+		if policyContext.OwnerPrincipal != request.OwnerPrincipal {
+			return PrepareResult{}, serviceError(CodeConflict, "retry cannot change mandate owner")
 		}
 		if request.PolicyContextID != nil && *request.PolicyContextID != policyContext.ID {
 			return PrepareResult{}, serviceError(CodeConflict, "retry cannot change policy context")
@@ -185,6 +204,10 @@ INSERT INTO runs (
 	return PrepareResult{
 		RunGrantID:            grantID,
 		PolicyContextID:       policyContext.ID,
+		MandateID:             policyContext.MandateID,
+		OwnerPrincipal:        policyContext.OwnerPrincipal,
+		AgentPrincipal:        policyContext.AgentPrincipal,
+		IssuedAt:              policyContext.IssuedAt,
 		GrantFingerprint:      fingerprint("grant", grantDigest[:]),
 		CapabilityFingerprint: fingerprint("cap", digest),
 		Status:                "PREPARED",
@@ -198,16 +221,27 @@ func (s *Service) createContext(ctx context.Context, tx *sql.Tx, request Prepare
 	if err != nil {
 		return contextRow{}, err
 	}
+	mandateID, err := opaqueID("mnd", 16)
+	if err != nil {
+		return contextRow{}, err
+	}
+	agentPrincipal := agentPrincipalFor(request.AgentID)
 	expiresAt := now.Add(s.contextTTL)
 	mandate := struct {
+		MandateID   string       `json:"mandateId"`
 		TemplateID  string       `json:"templateId"`
 		PurposeID   string       `json:"purposeId"`
+		Owner       string       `json:"ownerPrincipal"`
+		Agent       string       `json:"agentPrincipal"`
 		Permissions []Permission `json:"permissions"`
 		IssuedAt    string       `json:"issuedAt"`
 		ExpiresAt   string       `json:"expiresAt"`
 	}{
+		MandateID:   mandateID,
 		TemplateID:  MandateTemplateID,
 		PurposeID:   PurposeMixedOperations,
+		Owner:       request.OwnerPrincipal,
+		Agent:       agentPrincipal,
 		Permissions: PlatformPermissions(),
 		IssuedAt:    formatTime(now),
 		ExpiresAt:   formatTime(expiresAt),
@@ -219,11 +253,15 @@ func (s *Service) createContext(ctx context.Context, tx *sql.Tx, request Prepare
 	mandateDigest := sha256.Sum256(mandateJSON)
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO contexts (
-  id, agent_id, purpose_id, mandate_template_id, mandate_json, mandate_hash,
-  policy_json, policy_hash, policy_version, state, issued_at, expires_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
+  id, mandate_id, agent_id, agent_principal, owner_principal, purpose_id,
+  mandate_template_id, mandate_json, mandate_hash, policy_json, policy_hash,
+  policy_version, state, issued_at, expires_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
 		contextID,
+		mandateID,
 		request.AgentID,
+		agentPrincipal,
+		request.OwnerPrincipal,
 		PurposeMixedOperations,
 		MandateTemplateID,
 		string(mandateJSON),
@@ -243,7 +281,9 @@ VALUES (?, 'crm.resolve_customer', 0)`, contextID); err != nil {
 		return contextRow{}, fmt.Errorf("create fixture counter: %w", err)
 	}
 	return contextRow{
-		ID: contextID, AgentID: request.AgentID, PurposeID: PurposeMixedOperations,
+		ID: contextID, MandateID: mandateID, AgentID: request.AgentID,
+		AgentPrincipal: agentPrincipal, OwnerPrincipal: request.OwnerPrincipal,
+		PurposeID:         PurposeMixedOperations,
 		MandateTemplateID: MandateTemplateID, MandateJSON: string(mandateJSON),
 		MandateHash: hex.EncodeToString(mandateDigest[:]), PolicyJSON: string(s.policy.Raw),
 		PolicyHash: s.policy.Hash, PolicyVersion: s.policy.Policy.Version,
@@ -261,6 +301,9 @@ func (s *Service) requireExistingContext(ctx context.Context, tx *sql.Tx, reques
 	}
 	if row.State != "ACTIVE" || s.now().After(row.ExpiresAt) {
 		return contextRow{}, serviceError(CodeConflict, "policy context is not active")
+	}
+	if row.OwnerPrincipal != request.OwnerPrincipal || row.AgentPrincipal != agentPrincipalFor(request.AgentID) {
+		return contextRow{}, serviceError(CodeConflict, "policy context principal binding does not match")
 	}
 	if row.PolicyHash != s.policy.Hash || row.PolicyVersion != s.policy.Policy.Version {
 		return contextRow{}, serviceError(CodeConflict, "policy context is pinned to a different policy")
@@ -286,6 +329,10 @@ func (s *Service) Activate(ctx context.Context, runID string) (LifecycleResult, 
 	}
 	if row.State != "PREPARED" {
 		return LifecycleResult{}, serviceError(CodeConflict, "terminal or expired Run cannot be activated")
+	}
+	policyContext, contextErr := loadContext(ctx, tx, row.ContextID)
+	if contextErr != nil || policyContext.State != "ACTIVE" {
+		return LifecycleResult{}, serviceError(CodeConflict, "mandate is no longer active")
 	}
 	now := s.now()
 	if !now.Before(row.ExpiresAt) {
@@ -328,7 +375,16 @@ func (s *Service) Finish(ctx context.Context, runID string, status string) (Life
 	if row.State == status {
 		return lifecycleResult(row), nil
 	}
-	if row.State != "PREPARED" && row.State != "ACTIVE" {
+	policyContext, contextErr := loadContext(ctx, tx, row.ContextID)
+	if contextErr != nil {
+		return LifecycleResult{}, fmt.Errorf("load finish context: %w", contextErr)
+	}
+	if row.State == "REVOKED" {
+		if policyContext.State != "REVOKED" || (status != "CANCELLED" && status != "ABANDONED") {
+			return LifecycleResult{}, serviceError(CodeConflict, "revoked Run can only be terminalized as cancelled")
+		}
+	}
+	if row.State != "PREPARED" && row.State != "ACTIVE" && row.State != "REVOKED" {
 		return LifecycleResult{}, serviceError(CodeConflict, "Run is already terminal with a different status")
 	}
 	now := s.now()
@@ -341,6 +397,142 @@ func (s *Service) Finish(ctx context.Context, runID string, status string) (Life
 		return LifecycleResult{}, fmt.Errorf("commit finish: %w", err)
 	}
 	return lifecycleResult(row), nil
+}
+
+func (s *Service) MandateSummary(ctx context.Context, mandateID string) (MandateSummary, error) {
+	if mandateID == "" || len(mandateID) > 128 {
+		return MandateSummary{}, serviceError(CodeInvalidRequest, "mandateId is required")
+	}
+	row, err := loadContextByMandateID(ctx, s.store.db, mandateID)
+	if err != nil {
+		if isNotFound(err) {
+			return MandateSummary{}, serviceError(CodeNotFound, "mandate not found")
+		}
+		return MandateSummary{}, fmt.Errorf("load mandate summary: %w", err)
+	}
+	return s.mandateSummary(row), nil
+}
+
+func (s *Service) RevokeMandate(ctx context.Context, mandateID, actor string) (RevokeResult, error) {
+	if mandateID == "" || len(mandateID) > 128 {
+		return RevokeResult{}, serviceError(CodeInvalidRequest, "mandateId is required")
+	}
+	if actor == "" {
+		actor = "control-plane"
+	}
+	if len(actor) > 96 {
+		return RevokeResult{}, serviceError(CodeInvalidRequest, "revocation actor is too long")
+	}
+	tx, err := s.store.begin(ctx)
+	if err != nil {
+		return RevokeResult{}, fmt.Errorf("begin mandate revocation: %w", err)
+	}
+	defer tx.Rollback()
+	row, err := loadContextByMandateID(ctx, tx, mandateID)
+	if err != nil {
+		if isNotFound(err) {
+			return RevokeResult{}, serviceError(CodeNotFound, "mandate not found")
+		}
+		return RevokeResult{}, fmt.Errorf("load mandate for revocation: %w", err)
+	}
+	if row.State == "REVOKED" {
+		rows, queryErr := tx.QueryContext(ctx, `
+SELECT run_id FROM runs WHERE context_id = ? AND state = 'REVOKED'
+ORDER BY issued_at, run_id`, row.ID)
+		if queryErr != nil {
+			return RevokeResult{}, fmt.Errorf("find previously revoked Runs: %w", queryErr)
+		}
+		affected := make([]string, 0)
+		for rows.Next() {
+			var runID string
+			if scanErr := rows.Scan(&runID); scanErr != nil {
+				rows.Close()
+				return RevokeResult{}, fmt.Errorf("scan previously revoked Run: %w", scanErr)
+			}
+			affected = append(affected, runID)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			rows.Close()
+			return RevokeResult{}, fmt.Errorf("iterate previously revoked Runs: %w", rowsErr)
+		}
+		rows.Close()
+		return RevokeResult{MandateSummary: s.mandateSummary(row), AffectedRunIDs: affected}, nil
+	}
+	if row.State != "ACTIVE" {
+		return RevokeResult{}, serviceError(CodeConflict, "mandate is not active")
+	}
+	now := s.now()
+	rows, err := tx.QueryContext(ctx, `
+SELECT run_id FROM runs
+WHERE context_id = ? AND state IN ('PREPARED', 'ACTIVE')
+ORDER BY issued_at, run_id`, row.ID)
+	if err != nil {
+		return RevokeResult{}, fmt.Errorf("find active mandate Runs: %w", err)
+	}
+	affected := make([]string, 0)
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			rows.Close()
+			return RevokeResult{}, fmt.Errorf("scan active mandate Run: %w", err)
+		}
+		affected = append(affected, runID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return RevokeResult{}, fmt.Errorf("iterate active mandate Runs: %w", err)
+	}
+	rows.Close()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE contexts
+SET state = 'REVOKED', revoked_at = ?, revoked_by = ?,
+    revocation_reason = 'Mandate revoked by the control plane'
+WHERE id = ? AND state = 'ACTIVE'`, formatTime(now), actor, row.ID); err != nil {
+		return RevokeResult{}, fmt.Errorf("persist mandate revocation: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE runs SET state = 'REVOKED'
+WHERE context_id = ? AND state IN ('PREPARED', 'ACTIVE')`, row.ID); err != nil {
+		return RevokeResult{}, fmt.Errorf("revoke active Run authority: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return RevokeResult{}, fmt.Errorf("commit mandate revocation: %w", err)
+	}
+	row.State = "REVOKED"
+	row.RevokedAt = sql.NullString{String: formatTime(now), Valid: true}
+	row.RevokedBy = sql.NullString{String: actor, Valid: true}
+	row.RevocationReason = sql.NullString{String: "Mandate revoked by the control plane", Valid: true}
+	return RevokeResult{MandateSummary: s.mandateSummary(row), AffectedRunIDs: affected}, nil
+}
+
+func (s *Service) mandateSummary(row contextRow) MandateSummary {
+	type storedMandate struct {
+		Permissions []Permission `json:"permissions"`
+	}
+	var mandate storedMandate
+	if err := json.Unmarshal([]byte(row.MandateJSON), &mandate); err != nil || len(mandate.Permissions) == 0 {
+		mandate.Permissions = PlatformPermissions()
+	}
+	mandateDigest, _ := hex.DecodeString(row.MandateHash)
+	summary := MandateSummary{
+		MandateID: row.MandateID, Status: row.State, OwnerPrincipal: row.OwnerPrincipal,
+		AgentPrincipal: row.AgentPrincipal, PolicyContextID: row.ID,
+		PurposeID: row.PurposeID, PolicyID: s.policy.Policy.ID, PolicyVersion: row.PolicyVersion,
+		GrantedPermissions: mandate.Permissions, IssuedAt: row.IssuedAt, ExpiresAt: row.ExpiresAt,
+		MandateFingerprint: fingerprint("mandate", mandateDigest),
+	}
+	if row.RevokedAt.Valid {
+		if revokedAt, err := parseTime(row.RevokedAt.String); err == nil {
+			summary.RevokedAt = &revokedAt
+		}
+	}
+	if row.RevokedBy.Valid {
+		summary.RevokedBy = row.RevokedBy.String
+	}
+	if row.RevocationReason.Valid {
+		summary.RevocationReason = row.RevocationReason.String
+	}
+	return summary
 }
 
 func (s *Service) Authenticate(ctx context.Context, bearer string) (Principal, error) {
@@ -366,6 +558,8 @@ func (s *Service) Authenticate(ctx context.Context, bearer string) (Principal, e
 	}
 	return Principal{
 		RunID: row.RunID, RunGrantID: row.GrantID, AgentID: row.AgentID,
+		AgentPrincipal: policyContext.AgentPrincipal, OwnerPrincipal: policyContext.OwnerPrincipal,
+		MandateID:       policyContext.MandateID,
 		PolicyContextID: row.ContextID, Permissions: permissions, ExpiresAt: row.ExpiresAt,
 	}, nil
 }
@@ -384,6 +578,20 @@ func validatePrepare(runID string, request PrepareRequest) error {
 		return serviceError(CodeInvalidRequest, "requestedPermissions must contain one to five tuples")
 	}
 	return nil
+}
+
+func normalizeOwnerPrincipal(owner string) (string, error) {
+	if owner == "" {
+		return DemoUserA, nil
+	}
+	if owner != DemoUserA && owner != DemoUserB {
+		return "", serviceError(CodeInvalidRequest, "ownerPrincipal must be user-a or user-b")
+	}
+	return owner, nil
+}
+
+func agentPrincipalFor(agentID string) string {
+	return "agent:" + agentID
 }
 
 func normalizePermissions(input []Permission) ([]Permission, error) {
@@ -471,12 +679,16 @@ func equalBytes(left, right []byte) bool {
 	return different == 0
 }
 
-func prepareResultFromRun(row runRow) PrepareResult {
+func prepareResultFromRun(row runRow, policyContext contextRow) PrepareResult {
 	var permissions []Permission
 	_ = json.Unmarshal([]byte(row.GrantJSON), &permissions)
 	grantDigest, _ := hex.DecodeString(row.GrantHash)
 	return PrepareResult{
 		RunGrantID: row.GrantID, PolicyContextID: row.ContextID,
+		MandateID:             policyContext.MandateID,
+		OwnerPrincipal:        policyContext.OwnerPrincipal,
+		AgentPrincipal:        policyContext.AgentPrincipal,
+		IssuedAt:              policyContext.IssuedAt,
 		GrantFingerprint:      fingerprint("grant", grantDigest),
 		CapabilityFingerprint: fingerprint("cap", row.CapabilityDigest),
 		Status:                row.State, ExpiresAt: row.ExpiresAt, GrantedPermissions: permissions,

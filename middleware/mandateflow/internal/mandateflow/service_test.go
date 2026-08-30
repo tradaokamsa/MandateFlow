@@ -279,3 +279,148 @@ func TestExpiredBearerFailsClosed(t *testing.T) {
 		t.Fatalf("expired bearer remained valid: %v", err)
 	}
 }
+
+func TestMandateRevocationIsDurableIdempotentAndClosesAuthority(t *testing.T) {
+	service := newTestService(t)
+	principal, prepared, bearer := prepareActiveRun(t, service, "run-revoke", "agent-revoke", PrepareNew, nil, nil, PlatformPermissions())
+
+	summary, err := service.MandateSummary(context.Background(), prepared.MandateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Status != "ACTIVE" || summary.OwnerPrincipal != DemoUserA || summary.AgentPrincipal == "" {
+		t.Fatalf("unexpected mandate summary: %+v", summary)
+	}
+
+	revoked, err := service.RevokeMandate(context.Background(), prepared.MandateID, DemoUserA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.Status != "REVOKED" || len(revoked.AffectedRunIDs) != 1 || revoked.AffectedRunIDs[0] != "run-revoke" || revoked.RevokedAt == nil {
+		t.Fatalf("unexpected revocation result: %+v", revoked)
+	}
+	if _, err := service.Authenticate(context.Background(), bearer); !ErrorHasCode(err, CodeInvalidToken) {
+		t.Fatalf("revoked bearer remained valid: %v", err)
+	}
+	if _, err := service.ExecuteTool(context.Background(), principal, "support.list_tickets", ""); !ErrorHasCode(err, CodeInvalidToken) {
+		t.Fatalf("revoked principal remained usable: %v", err)
+	}
+	if _, err := service.Finish(context.Background(), "run-revoke", "CANCELLED"); err != nil {
+		t.Fatalf("revoked Run could not be terminalized as cancelled: %v", err)
+	}
+	if _, err := service.RevokeMandate(context.Background(), prepared.MandateID, DemoUserA); err != nil {
+		t.Fatalf("revocation was not idempotent: %v", err)
+	}
+
+	contextID := prepared.PolicyContextID
+	retryOf := "run-revoke"
+	if _, err := service.Prepare(context.Background(), "run-revoke-2", PrepareRequest{
+		AgentID:              "agent-revoke",
+		OwnerPrincipal:       DemoUserA,
+		RuntimeInstanceID:    "runtime-revoke-2",
+		Mode:                 PrepareRetry,
+		PolicyContextID:      &contextID,
+		RetryOfRunID:         &retryOf,
+		MandateTemplateID:    MandateTemplateID,
+		RequestedPermissions: PlatformPermissions(),
+		CapabilitySHA256:     mustCapabilityDigest(t),
+	}); !ErrorHasCode(err, CodeConflict) {
+		t.Fatalf("retry under revoked mandate was admitted: %v", err)
+	}
+}
+
+func TestOwnershipDenialIsRedactedAndPreExecution(t *testing.T) {
+	service := newTestService(t)
+	principal, prepared, _ := prepareActiveRun(t, service, "run-owner", "agent-owner", PrepareNew, nil, nil, PlatformPermissions())
+	support, err := service.ExecuteTool(context.Background(), principal, "support.list_tickets", "")
+	if err != nil || support.Reference == nil {
+		t.Fatalf("failed to create owned reference: result=%+v error=%v", support, err)
+	}
+	if _, err := service.store.db.Exec(`UPDATE protected_references SET owner_principal = 'user-b' WHERE context_id = ?`, prepared.PolicyContextID); err != nil {
+		t.Fatal(err)
+	}
+	denied, err := service.ExecuteTool(context.Background(), principal, "cases.lookup_subject", support.Reference.Reference)
+	if err != nil || denied.OK || denied.Code != string(CodeOwnershipDenied) {
+		t.Fatalf("unexpected ownership denial: result=%+v error=%v", denied, err)
+	}
+	evidence, err := service.Evidence(context.Background(), "run-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var denial *ReceiptView
+	for index := range evidence.Receipts {
+		if evidence.Receipts[index].ID == denied.ReceiptID {
+			denial = &evidence.Receipts[index]
+		}
+	}
+	if denial == nil || denial.DownstreamInvoked || denial.Outcome != "NOT_INVOKED" || denial.RedactedResultSummary != "Protected fixture was not invoked" {
+		t.Fatalf("ownership denial was not redacted/pre-execution: %+v", denial)
+	}
+
+	spoofed := principal
+	spoofed.OwnerPrincipal = DemoUserB
+	if _, err := service.ExecuteTool(context.Background(), spoofed, "support.list_tickets", ""); !ErrorHasCode(err, CodeInvalidToken) {
+		t.Fatalf("owner spoof was accepted: %v", err)
+	}
+
+	if _, err := service.Prepare(context.Background(), "run-owner-spoof", PrepareRequest{
+		AgentID:              "agent-owner",
+		OwnerPrincipal:       DemoUserB,
+		RuntimeInstanceID:    "runtime-owner-spoof",
+		Mode:                 PrepareNew,
+		MandateTemplateID:    MandateTemplateID,
+		RequestedPermissions: PlatformPermissions(),
+		CapabilitySHA256:     mustCapabilityDigest(t),
+	}); !ErrorHasCode(err, CodeConflict) {
+		t.Fatalf("Agent owner binding changed: %v", err)
+	}
+}
+
+func TestUserBUsesOnlyUserBOwnedFixture(t *testing.T) {
+	service := newTestService(t)
+	bearer, digest := testBearer(t)
+	prepared, err := service.Prepare(context.Background(), "run-user-b", PrepareRequest{
+		AgentID:              "agent-user-b",
+		OwnerPrincipal:       DemoUserB,
+		RuntimeInstanceID:    "runtime-user-b",
+		Mode:                 PrepareNew,
+		MandateTemplateID:    MandateTemplateID,
+		RequestedPermissions: PlatformPermissions(),
+		CapabilitySHA256:     digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Activate(context.Background(), "run-user-b"); err != nil {
+		t.Fatal(err)
+	}
+	principal, err := service.Authenticate(context.Background(), bearer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.ExecuteTool(context.Background(), principal, "support.list_tickets", "")
+	if err != nil || result.Reference == nil {
+		t.Fatalf("User B could not access its fixture: result=%+v error=%v", result, err)
+	}
+	supportCase, err := service.ExecuteTool(context.Background(), principal, "cases.lookup_subject", result.Reference.Reference)
+	if err != nil || supportCase.Reference == nil {
+		t.Fatalf("User B could not derive its operations Case: result=%+v error=%v", supportCase, err)
+	}
+	crm, err := service.ExecuteTool(context.Background(), principal, "crm.resolve_customer", supportCase.Reference.Reference)
+	if err != nil || crm.Customer == nil || crm.Customer.ContactChannel != "internal-crm://support-follow-up/customer-002" {
+		t.Fatalf("User B CRM result used the wrong fixture: result=%+v error=%v", crm, err)
+	}
+	var owner string
+	if err := service.store.db.QueryRow(`SELECT owner_principal FROM protected_references WHERE context_id = ?`, prepared.PolicyContextID).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if owner != DemoUserB {
+		t.Fatalf("reference owner = %q, want %q", owner, DemoUserB)
+	}
+}
+
+func mustCapabilityDigest(t *testing.T) string {
+	t.Helper()
+	_, digest := testBearer(t)
+	return digest
+}

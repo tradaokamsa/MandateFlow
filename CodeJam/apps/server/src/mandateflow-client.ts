@@ -5,6 +5,7 @@ import type {
   MandatePermission,
   MandatePrepareRequest,
   MandatePrepareResult,
+  MandateSummary,
 } from "./types.js";
 
 export const MANDATE_PERMISSIONS: MandatePermission[] = [
@@ -28,6 +29,10 @@ const prepareResultSchema = z.object({
   policyContextId: z.string().min(1),
   grantFingerprint: z.string().min(1),
   capabilityFingerprint: z.string().min(1),
+  mandateId: z.string().min(1),
+  ownerPrincipal: z.enum(["user-a", "user-b"]),
+  agentPrincipal: z.string().min(1),
+  issuedAt: z.string().min(1),
   status: z.enum(["PREPARED", "ACTIVE"]),
   expiresAt: z.string().min(1),
   grantedPermissions: z.array(
@@ -87,6 +92,42 @@ const evidenceSchema = z.object({
   capabilityFingerprint: z.string(),
   crmCounter: z.number().int().nonnegative(),
   receipts: z.array(receiptSchema),
+  mandateId: z.string().min(1),
+  mandateStatus: z.string().min(1),
+  ownerPrincipal: z.enum(["user-a", "user-b"]),
+  agentPrincipal: z.string().min(1),
+  issuedAt: z.string().min(1),
+  expiresAt: z.string().min(1),
+  revokedAt: z.string().optional(),
+  revokedBy: z.string().optional(),
+  revocationReason: z.string().optional(),
+}).strict();
+
+const mandateSummarySchema = z.object({
+  mandateId: z.string().min(1),
+  status: z.enum(["ACTIVE", "REVOKED", "CLOSED"]),
+  ownerPrincipal: z.enum(["user-a", "user-b"]),
+  agentPrincipal: z.string().min(1),
+  policyContextId: z.string().min(1),
+  purposeId: z.string().min(1),
+  policyId: z.string().min(1),
+  policyVersion: z.number().int(),
+  grantedPermissions: z.array(z.object({
+    tool: z.string(),
+    action: z.string(),
+    resourceKind: z.string(),
+  }).strict()),
+  issuedAt: z.string().min(1),
+  expiresAt: z.string().min(1),
+  mandateFingerprint: z.string().min(1),
+  revokedAt: z.string().optional(),
+  revokedBy: z.string().optional(),
+  revocationReason: z.string().optional(),
+}).strict();
+
+const revokeResultSchema = z.object({
+  ...mandateSummarySchema.shape,
+  affectedRunIds: z.array(z.string()),
 }).strict();
 
 export interface MandateFlowControl {
@@ -98,6 +139,11 @@ export interface MandateFlowControl {
     status: "COMPLETED" | "FAILED" | "CANCELLED" | "ABANDONED",
   ): Promise<void>;
   evidence(runId: string): Promise<MandateEvidence>;
+  summary?(mandateId: string): Promise<MandateSummary>;
+  revoke?(mandateId: string, actorPrincipal: string): Promise<{
+    mandate: MandateSummary;
+    affectedRunIds: string[];
+  }>;
 }
 
 export class MandateFlowClient implements MandateFlowControl {
@@ -155,6 +201,27 @@ export class MandateFlowClient implements MandateFlowControl {
       { method: "GET" },
     );
     return evidenceSchema.parse(body) as MandateEvidence;
+  }
+
+  async summary(mandateId: string): Promise<MandateSummary> {
+    const body = await this.request(
+      "/control/v1/mandates/" + encodeURIComponent(mandateId),
+      { method: "GET" },
+    );
+    return mandateSummarySchema.parse(body) as MandateSummary;
+  }
+
+  async revoke(mandateId: string, actorPrincipal: string): Promise<{
+    mandate: MandateSummary;
+    affectedRunIds: string[];
+  }> {
+    const body = await this.request(
+      "/control/v1/mandates/" + encodeURIComponent(mandateId) + "/revoke",
+      { method: "POST", body: JSON.stringify({ actorPrincipal }) },
+    );
+    const parsed = revokeResultSchema.parse(body);
+    const { affectedRunIds, ...mandate } = parsed;
+    return { mandate: mandate as MandateSummary, affectedRunIds };
   }
 
   private async request(path: string, options: RequestInit): Promise<unknown> {

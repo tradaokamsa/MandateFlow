@@ -1,6 +1,29 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Agent } from "./types.js";
+
+export const CODEX_HOME_VERSION = 1;
+
+export function agentCodexHomePath(root: string, agentId: string): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(agentId)) {
+    throw new Error("Agent ID is not valid for a private Codex home");
+  }
+  const resolvedRoot = path.resolve(root);
+  const candidate = path.resolve(resolvedRoot, "agents", agentId);
+  if (candidate !== resolvedRoot && !candidate.startsWith(resolvedRoot + path.sep)) {
+    throw new Error("Agent Codex home escaped the configured root");
+  }
+  return candidate;
+}
+
+export async function ensureAgentCodexHome(root: string, agentId: string): Promise<string> {
+  const home = agentCodexHomePath(root, agentId);
+  await mkdir(home, { recursive: true, mode: 0o700 });
+  await chmod(home, 0o700);
+  const info = await stat(home);
+  if (!info.isDirectory()) throw new Error("Agent Codex home is not a directory");
+  return home;
+}
 
 export class WorkspaceManager {
   constructor(private readonly root: string) {}

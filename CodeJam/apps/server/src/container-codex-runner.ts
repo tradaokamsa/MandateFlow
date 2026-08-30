@@ -92,7 +92,7 @@ export function buildContainerRunArgs(
     "--mount",
     "type=bind,src=" + request.workspacePath + ",dst=/workspace",
     "--mount",
-    "type=bind,src=" + config.codexHome + ",dst=/codex-home",
+    "type=bind,src=" + (request.codexHomePath ?? config.codexHome) + ",dst=/codex-home",
     "--workdir",
     "/workspace",
     config.containerRuntimeImage,

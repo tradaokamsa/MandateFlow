@@ -155,7 +155,7 @@ export class CodexRunner implements AgentRunner {
       );
       child = spawn(this.config.codexBin, args, {
         cwd: request.workspacePath,
-        env: this.childEnvironment(request.mandateFlowCapability),
+        env: this.childEnvironment(request.mandateFlowCapability, request.codexHomePath),
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
@@ -289,7 +289,10 @@ export class CodexRunner implements AgentRunner {
     }
   }
 
-  private childEnvironment(mandateFlowCapability = ""): NodeJS.ProcessEnv {
+  private childEnvironment(
+    mandateFlowCapability = "",
+    codexHomePath = this.config.codexHome,
+  ): NodeJS.ProcessEnv {
     const inheritedNames = [
       "PATH",
       "HOME",
@@ -305,7 +308,7 @@ export class CodexRunner implements AgentRunner {
       "TERM",
     ] as const;
     const environment: NodeJS.ProcessEnv = {
-      CODEX_HOME: this.config.codexHome,
+      CODEX_HOME: codexHomePath,
       GROQ_API_KEY: this.config.groqApiKey,
       NO_COLOR: "1",
     };
