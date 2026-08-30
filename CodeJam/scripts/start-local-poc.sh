@@ -117,6 +117,16 @@ if [[ ! -d node_modules ]]; then
   npm ci
 fi
 
+if [[ "${APP_DATA_DIR:-}" == "/app/data" ]]; then
+  unset APP_DATA_DIR
+fi
+if [[ "${AGENT_WORKSPACE_ROOT:-}" == "/app/workspaces" ]]; then
+  unset AGENT_WORKSPACE_ROOT
+fi
+if [[ "${CODEX_HOME:-}" == "/app/codex-home" ]]; then
+  unset CODEX_HOME
+fi
+
 if [[ -n "${LOCAL_POC_DATA_ROOT:-}" ]]; then
   local_state_root="$LOCAL_POC_DATA_ROOT"
   export APP_DATA_DIR="$local_state_root/data"
