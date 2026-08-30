@@ -11,9 +11,10 @@ Go exclusively owns the SQLite database and the fixed five-tool protected
 fixture registry. Node sends lifecycle facts through the control API and never
 opens the database or evaluates provenance policy.
 
-Run the focused suite from the repository root:
+Run the focused suite from the `CodeJam` application directory:
 
 ```bash
+cd CodeJam
 npm run check:mandateflow
 ```
 
