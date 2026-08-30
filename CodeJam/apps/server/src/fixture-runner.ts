@@ -51,6 +51,11 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
     }
 
     if (request.prompt.toLowerCase().includes("retry only the previously denied")) {
+      request.onProgress?.({
+        stage: "tool",
+        label: "Replaying the denied CRM call",
+        detail: "The retry is using the prior Payment-derived Case reference without re-deriving it.",
+      });
       await this.initializeSession(request.mandateFlowCapability);
       const paymentCaseReference = await this.loadPaymentCaseReference(request);
       const retryDenial = await this.callTool(
@@ -76,9 +81,19 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
       );
     }
 
+    request.onProgress?.({
+      stage: "phase",
+      label: "Discovering protected tools",
+      detail: "The secure Runtime is confirming the tools granted by this mandate.",
+    });
     await this.initializeSession(request.mandateFlowCapability);
     await this.assertFullGrantDiscovery(request.mandateFlowCapability);
 
+    request.onProgress?.({
+      stage: "tool",
+      label: "Checking the trusted Support path",
+      detail: "Support → Case → CRM should be allowed by the provenance policy.",
+    });
     const support = await this.callTool(
       request.mandateFlowCapability,
       "support.list_tickets",
@@ -98,6 +113,11 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
     );
     requireSuccess(supportCRM, "Support CRM recovery");
 
+    request.onProgress?.({
+      stage: "tool",
+      label: "Checking the Payment path",
+      detail: "Payment → Case → CRM should be blocked before CRM is invoked.",
+    });
     const payment = await this.callTool(
       request.mandateFlowCapability,
       "payments.list_failures",
@@ -125,6 +145,11 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
       throw new Error("Deterministic payment flow did not produce the expected policy denial");
     }
 
+    request.onProgress?.({
+      stage: "tool",
+      label: "Recording a safe recovery",
+      detail: "The protected workflow is using the offered aggregate operation after the denial.",
+    });
     const aggregate = await this.callTool(
       request.mandateFlowCapability,
       "payments.aggregate_failures",
@@ -132,6 +157,11 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
     );
     requireSuccess(aggregate, "Payment aggregate recovery");
 
+    request.onProgress?.({
+      stage: "tool",
+      label: "Verifying fresh Support recovery",
+      detail: "A new Support-derived Case should be allowed in the same policy context.",
+    });
     const freshSupport = await this.callTool(
       request.mandateFlowCapability,
       "support.list_tickets",

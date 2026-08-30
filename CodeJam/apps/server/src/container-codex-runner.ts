@@ -215,6 +215,7 @@ export class ContainerCodexRunner implements AgentRunner {
               this.config.groqApiKey,
             ),
             parsed,
+            request.onProgress,
           );
         }
       } else {
@@ -238,13 +239,14 @@ export class ContainerCodexRunner implements AgentRunner {
         child.once("close", (code) => resolve(code ?? 1));
       });
       if (stdout.trim()) {
-        parseCodexEventLine(
-          redactRuntimeText(
-            redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
-            this.config.groqApiKey,
-          ),
-          parsed,
-        );
+          parseCodexEventLine(
+            redactRuntimeText(
+              redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
+              this.config.groqApiKey,
+            ),
+            parsed,
+            request.onProgress,
+          );
       }
       if (active.cancelled) throw new RunCancelledError();
       if (active.timedOut) {

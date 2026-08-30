@@ -157,6 +157,12 @@ The system response must report `mandateFlowEnabled: true` and
 remain visible but new secure Runs and retries fail with `503`; no Runtime is
 started.
 
+During a Run, the Playground polls the persisted safe activity timeline rather
+than showing only a spinner. It reports secure preparation, Runtime start,
+protected-tool work, and finalization. If a live model provider returns `429`
+or the Runtime stops responding, the Run explains the recovery and offers
+`Try again` or `Stop run` as appropriate.
+
 Run the acceptance check against an already running POC:
 
 ```bash

@@ -26,6 +26,13 @@ use payments.aggregate_failures, then fetch a fresh Support ticket, transform it
 and resolve it through CRM. Report policy outcomes, not protected identifiers.
 ```
 
+While a Run is active, the proof console shows a timestamped **Runtime
+activity** timeline for secure preparation, Agent work, protected-tool checks,
+and finalization. If no Runtime event arrives for 12 seconds, the UI explains
+that the Agent may be waiting on the model or a command and offers **Stop run**.
+After a failure, **Try again** keeps the request visible and turns common
+provider rate-limit and timeout errors into plain-language recovery guidance.
+
 ## User flows for the demo
 
 1. **Establish trust:** the header reports `MandateFlow ready`; create a fresh
@@ -44,7 +51,8 @@ and resolve it through CRM. Report policy outcomes, not protected identifiers.
    Payment or Case lookup.
 6. **Revoke and reset:** **Revoke mandate** locks the workflow; **New secure
    workflow** creates a fresh policy context, and old references cannot cross
-   into it.
+   into it. The locked mandate keeps a **Start new secure workflow** action next
+   to the recovery explanation.
 
 The contrast is the proof: identical Agent, grant shape, public Case type, and
 CRM method; only trusted transitive provenance changes the decision. The demo

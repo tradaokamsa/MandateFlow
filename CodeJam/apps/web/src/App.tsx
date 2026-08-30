@@ -62,6 +62,21 @@ function shortId(value: string): string {
   return value.length > 18 ? value.slice(0, 10) + "…" + value.slice(-5) : value;
 }
 
+function friendlyRunError(value: string | null): string {
+  const message = value ?? "The Runtime did not return a result.";
+  const normalized = message.toLowerCase();
+  if (normalized.includes("429") || normalized.includes("too many requests")) {
+    return "The model provider is rate-limiting requests right now. Wait a moment and try again, or check the configured provider limits.";
+  }
+  if (normalized.includes("timed out")) {
+    return "The Runtime did not respond before the timeout. Stop the Run, then try again with a smaller request.";
+  }
+  if (normalized.includes("without an agent message")) {
+    return "The Runtime closed without returning a response. Try the request again.";
+  }
+  return message;
+}
+
 function StatusPill({ status }: { status: Agent["status"] }) {
   return (
     <span className={"status status-" + status}>
@@ -608,6 +623,7 @@ export default function App() {
       (system.runtimeProvider === "fixture" || system.groqConfigured) &&
       (!system.mandateFlowEnabled || system.mandateFlowReady),
   );
+  const latestProgress = activeRun?.progress.at(-1);
 
   return (
     <div className="app-shell">
@@ -759,7 +775,11 @@ export default function App() {
                   onClick={toggleAgent}
                   disabled={busy || revokePending}
                 >
-                  {selected.status === "stopped" ? "Start" : "Stop"}
+                  {selected.status === "stopped"
+                    ? "Start"
+                    : selected.status === "busy"
+                      ? "Stop run"
+                      : "Stop Agent"}
                 </button>
                 <button
                   className="button button-danger"
@@ -854,8 +874,17 @@ export default function App() {
                 busy={busy}
                 canRun={runtimeReady && !revokePending && selected.status !== "stopped" && mandate?.status !== "REVOKED"}
                 canRetry={hasRetryableDenial && !revokePending && Boolean(evidence) && mandate?.status !== "REVOKED"}
+                canStop={selected.status === "busy"}
+                blockedReason={
+                  mandate?.status === "REVOKED"
+                    ? "This workflow is locked. Start a new secure workflow to run again."
+                    : selected.status === "stopped"
+                      ? "Start this Agent to run a secure workflow."
+                      : undefined
+                }
                 onRunProof={() => void runPrompt(heroPrompt)}
                 onRetry={() => void retryRun()}
+                onStop={() => void toggleAgent()}
               />
               {workflowNotice && (
                 <div className="workflow-status" role="status">
@@ -889,10 +918,23 @@ export default function App() {
                       </div>
                       {mandate.status !== "ACTIVE" ? (
                         <div className="mandate-revoked-note" role="status">
-                          {mandate.status === "REVOKED"
-                            ? mandate.revocationReason ?? "This mandate is revoked."
-                            : "This mandate is closed. Start a New secure workflow for fresh authority."}
-                          {mandate.revokedAt ? " · " + formatDateTime(mandate.revokedAt) : ""}
+                          <div>
+                            <strong>{mandate.status === "REVOKED" ? "Workflow locked" : "Workflow closed"}</strong>
+                            <span>
+                              {mandate.status === "REVOKED"
+                                ? mandate.revocationReason ?? "This mandate is revoked."
+                                : "This mandate is closed."}
+                              {mandate.revokedAt ? " · " + formatDateTime(mandate.revokedAt) : ""}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="button button-primary button-compact"
+                            onClick={() => void newDemoWorkflow()}
+                            disabled={busy || revokePending || selected.status === "busy"}
+                          >
+                            Start new secure workflow
+                          </button>
                         </div>
                       ) : (
                         <button
@@ -1006,14 +1048,29 @@ export default function App() {
                     </div>
                     <div className="thinking-row">
                       <Spinner />
-                      Codex is reading, editing, or running commands…
+                      <span>
+                        <strong>{latestProgress?.label ?? "Starting the Agent Runtime"}</strong>
+                        <small>
+                          {latestProgress?.detail ?? "Waiting for the secure Runtime to report its first event."}
+                        </small>
+                      </span>
                     </div>
                   </article>
                 )}
                 {activeRun?.status === "failed" && (
                   <article className="run-error">
-                    <strong>Run failed</strong>
-                    <span>{activeRun.error}</span>
+                    <div>
+                      <strong>Run failed</strong>
+                      <span>{friendlyRunError(activeRun.error)}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="button button-ghost button-compact"
+                      onClick={() => void runPrompt(activeRun.prompt)}
+                      disabled={busy || revokePending || mandate?.status === "REVOKED"}
+                    >
+                      Try again
+                    </button>
                   </article>
                 )}
                 <div ref={messageEnd} />

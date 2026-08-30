@@ -72,6 +72,7 @@ function run(id: string): AgentRun {
     capabilityFingerprint: "cap:retry",
     grantFingerprint: "grant:retry",
     runtimeInstanceId: "runtime-retry",
+    progress: [],
     createdAt: "2026-08-30T12:00:00.000Z",
   };
 }

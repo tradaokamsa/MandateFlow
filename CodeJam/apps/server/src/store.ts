@@ -100,6 +100,9 @@ function migrateDatabase(
   });
   const runs = legacy.runs.map((value) => ({
     ...(value as AgentRun),
+    progress: Array.isArray((value as Partial<AgentRun>).progress)
+      ? (value as AgentRun).progress
+      : [],
     mandateId:
       typeof (value as Partial<AgentRun>).mandateId === "string"
         ? (value as AgentRun).mandateId
