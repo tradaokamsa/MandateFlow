@@ -81,6 +81,12 @@ WHERE context_id = ? AND tool = 'crm.resolve_customer'`, run.ContextID).Scan(&co
 		RunID:                 run.RunID,
 		PolicyContextID:       run.ContextID,
 		RunGrantID:            run.GrantID,
+		MandateID:             policyContext.MandateID,
+		MandateStatus:         policyContext.State,
+		OwnerPrincipal:        policyContext.OwnerPrincipal,
+		AgentPrincipal:        policyContext.AgentPrincipal,
+		IssuedAt:              policyContext.IssuedAt,
+		ExpiresAt:             policyContext.ExpiresAt,
 		RuntimeInstanceID:     run.RuntimeInstanceID,
 		RunStatus:             run.State,
 		PurposeID:             policyContext.PurposeID,
@@ -90,6 +96,17 @@ WHERE context_id = ? AND tool = 'crm.resolve_customer'`, run.ContextID).Scan(&co
 		CapabilityFingerprint: fingerprint("cap", run.CapabilityDigest),
 		CRMCounter:            counter,
 		Receipts:              receipts,
+	}
+	if policyContext.RevokedAt.Valid {
+		if revokedAt, parseErr := parseTime(policyContext.RevokedAt.String); parseErr == nil {
+			view.RevokedAt = &revokedAt
+		}
+	}
+	if policyContext.RevokedBy.Valid {
+		view.RevokedBy = policyContext.RevokedBy.String
+	}
+	if policyContext.RevocationReason.Valid {
+		view.RevocationReason = policyContext.RevocationReason.String
 	}
 	if run.RetryOfRunID.Valid {
 		view.RetryOfRunID = &run.RetryOfRunID.String

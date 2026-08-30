@@ -89,6 +89,10 @@ describe("Groq Responses compatibility", () => {
         response.writeHead(207, {
           "content-type": "text/event-stream",
           "cache-control": "no-cache",
+          "retry-after": "42",
+          "x-ratelimit-remaining-tokens": "0",
+          "x-ratelimit-reset-tokens": "42s",
+          "x-request-id": "groq-request-id",
         });
         response.write("data: first\n\n");
         response.end("data: second\n\n");
@@ -117,6 +121,10 @@ describe("Groq Responses compatibility", () => {
     expect(response.status).toBe(207);
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     expect(response.headers.get("cache-control")).toBe("no-cache");
+    expect(response.headers.get("retry-after")).toBe("42");
+    expect(response.headers.get("x-ratelimit-remaining-tokens")).toBe("0");
+    expect(response.headers.get("x-ratelimit-reset-tokens")).toBe("42s");
+    expect(response.headers.get("x-request-id")).toBe("groq-request-id");
     expect(await response.text()).toBe("data: first\n\ndata: second\n\n");
     expect(receivedAuthorization).toBe("Bearer test-token");
     expect(receivedAccept).toBe("text/event-stream");
@@ -124,6 +132,41 @@ describe("Groq Responses compatibility", () => {
       input: "hello",
       tools: [{ type: "function", name: "do_work" }],
     });
+  });
+
+  it("waits for Groq's retry window before retrying a rate-limited request", async () => {
+    let attempts = 0;
+    const upstreamUrl = await listen(
+      createServer(async (request, response) => {
+        for await (const _chunk of request) {
+          void _chunk;
+        }
+        attempts += 1;
+        if (attempts === 1) {
+          response.writeHead(429, {
+            "content-type": "application/json",
+            "retry-after": "0.001",
+          });
+          response.end(JSON.stringify({ error: { code: "rate_limit_exceeded" } }));
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ status: "completed" }));
+      }),
+    );
+    const proxy = new GroqResponsesProxy(upstreamUrl);
+    proxies.push(proxy);
+    const proxyUrl = await proxy.start();
+
+    const response = await fetch(proxyUrl + "/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "hello" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "completed" });
+    expect(attempts).toBe(2);
   });
 
   it("returns 413 for a request body over 4 MiB", async () => {

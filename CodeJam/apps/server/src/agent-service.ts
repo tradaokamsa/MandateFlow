@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AppConfig } from "./config.js";
-import { isGroqConfigured } from "./config.js";
+import { isGroqConfigured, writeCodexConfig } from "./config.js";
 import { HttpError, RunCancelledError } from "./errors.js";
 import { containerName } from "./container-codex-runner.js";
 import {
@@ -15,11 +15,16 @@ import type {
   AgentRunner,
   CreateAgentInput,
   MandateEvidence,
+  MandateSummary,
   MandatePrepareRequest,
   Message,
   UpdateAgentInput,
 } from "./types.js";
-import { WorkspaceManager } from "./workspace.js";
+import {
+  CODEX_HOME_VERSION,
+  ensureAgentCodexHome,
+  WorkspaceManager,
+} from "./workspace.js";
 
 const now = () => new Date().toISOString();
 
@@ -47,7 +52,22 @@ export class AgentService {
     await this.store.initialize();
     await this.workspaces.initialize();
     await this.store.mutate((database) => {
+      for (const agent of database.agents) {
+        if (agent.ownerPrincipal !== "user-a" && agent.ownerPrincipal !== "user-b") {
+          agent.ownerPrincipal = "user-a";
+        }
+        if (!agent.agentPrincipal) agent.agentPrincipal = "agent:" + agent.id;
+        if (agent.codexHomeVersion !== CODEX_HOME_VERSION) {
+          agent.codexThreadId = null;
+          agent.codexHomeVersion = CODEX_HOME_VERSION;
+        }
+      }
       for (const run of database.runs) {
+        const runAgent = database.agents.find((agent) => agent.id === run.agentId);
+        if (runAgent) {
+          run.ownerPrincipal ??= runAgent.ownerPrincipal;
+          run.agentPrincipal ??= runAgent.agentPrincipal;
+        }
         if (run.status === "queued" || run.status === "running") {
           run.status = "cancelled";
           run.error = "Server restarted while this run was active";
@@ -65,6 +85,11 @@ export class AgentService {
         }
       }
     });
+    await Promise.all(
+      this.store.snapshot().agents.map((agent) =>
+        ensureAgentCodexHome(this.config.codexHome, agent.id),
+      ),
+    );
     if (
       this.config.mandateFlowEnabled &&
       this.mandateFlow &&
@@ -89,12 +114,19 @@ export class AgentService {
   async createAgent(input: CreateAgentInput): Promise<Agent> {
     const timestamp = now();
     const id = randomUUID();
+    const ownerPrincipal = input.ownerPrincipal ?? "user-a";
+    if (ownerPrincipal !== "user-a" && ownerPrincipal !== "user-b") {
+      throw new HttpError(400, "ownerPrincipal must be user-a or user-b");
+    }
     const agent: Agent = {
       id,
       name: input.name.trim(),
       description: input.description?.trim() ?? "",
       instructions: input.instructions?.trim() ?? "",
       status: "ready",
+      ownerPrincipal,
+      agentPrincipal: "agent:" + id,
+      codexHomeVersion: CODEX_HOME_VERSION,
       workspacePath: this.workspaces.workspacePath(id),
       codexThreadId: null,
       activePolicyContextId: null,
@@ -181,6 +213,74 @@ export class AgentService {
     return this.mandateFlow.evidence(runId);
   }
 
+  async getMandateSummary(agentId: string): Promise<MandateSummary | null> {
+    const agent = this.getAgent(agentId);
+    const mandateId = this.store
+      .snapshot()
+      .runs.filter(
+        (run) => run.agentId === agentId && run.policyContextId === agent.activePolicyContextId,
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.mandateId;
+    if (!mandateId) return null;
+    if (!this.config.mandateFlowEnabled || !this.mandateFlow?.summary) {
+      return null;
+    }
+    return this.mandateFlow.summary(mandateId);
+  }
+
+  async revokeMandate(mandateId: string): Promise<{
+    mandate: MandateSummary;
+    agent: Agent;
+    run: AgentRun | null;
+  }> {
+    if (!this.config.mandateFlowEnabled || !this.mandateFlow?.revoke) {
+      throw new HttpError(404, "MandateFlow revocation is not enabled");
+    }
+    const snapshot = this.store.snapshot();
+    const associatedRun = snapshot.runs
+      .filter((candidate) => candidate.mandateId === mandateId || candidate.policyContextId === mandateId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+    if (!associatedRun) throw new HttpError(404, "Mandate not found");
+    const agent = this.getAgent(associatedRun.agentId);
+
+    // The sidecar transaction is the point of authority. Do this before asking
+    // a Runtime to stop so a failed sidecar cannot claim to have revoked it.
+    const result = await this.mandateFlow.revoke(mandateId, agent.ownerPrincipal);
+    const affectedRunIds = new Set(result.affectedRunIds);
+    const activeRun = this.store
+      .snapshot()
+      .runs.find(
+        (candidate) =>
+          affectedRunIds.has(candidate.id) &&
+          (candidate.status === "queued" || candidate.status === "running"),
+      );
+    if (activeRun) {
+      await this.cancelRevokedRun(agent.id, activeRun.id);
+    }
+    await this.store.mutate((database) => {
+      for (const candidate of database.runs) {
+        if (!affectedRunIds.has(candidate.id)) continue;
+        if (candidate.status === "queued" || candidate.status === "running") {
+          candidate.status = "cancelled";
+          candidate.error = "Mandate was revoked; the active Runtime was cancelled";
+          candidate.completedAt = now();
+        }
+        candidate.mandateStatus = "revoked";
+      }
+      const storedAgent = database.agents.find((candidate) => candidate.id === agent.id);
+      if (storedAgent && storedAgent.status === "busy") {
+        storedAgent.status = "ready";
+        storedAgent.updatedAt = now();
+      }
+    });
+    const updatedAgent = this.getAgent(agent.id);
+    const updatedRun = this.store
+      .snapshot()
+      .runs.filter((candidate) => candidate.agentId === agent.id && candidate.policyContextId === result.mandate.policyContextId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+    return { mandate: result.mandate, agent: updatedAgent, run: updatedRun };
+  }
+
   async sendMessage(
     agentId: string,
     prompt: string,
@@ -236,6 +336,7 @@ export class AgentService {
     if (this.config.mandateFlowEnabled) {
       await this.ensureMandateFlowReady();
       await this.requireFinalizedAuthority(agentId);
+      await this.ensureMandateContextUsable(agentId);
     }
     return this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === agentId);
@@ -306,6 +407,9 @@ export class AgentService {
       completedAt: null,
       policyContextId: null,
       runGrantId: null,
+      mandateId: null,
+      ownerPrincipal: null,
+      agentPrincipal: null,
       retryOfRunId,
       mandateStatus: "pending",
       capabilityFingerprint: null,
@@ -371,6 +475,8 @@ export class AgentService {
     let securityFinalizationPending = false;
     try {
       if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
+      const codexHomePath = await ensureAgentCodexHome(this.config.codexHome, agentAtStart.id);
+      await writeCodexConfig(this.config, codexHomePath);
 
       if (this.config.mandateFlowEnabled) {
         if (!this.mandateFlow) throw new HttpError(503, "MandateFlow is unavailable");
@@ -395,6 +501,7 @@ export class AgentService {
             : "NEW";
         const prepared = await this.mandateFlow.prepare(run.id, {
           agentId: agentAtStart.id,
+          ownerPrincipal: agentAtStart.ownerPrincipal,
           runtimeInstanceId:
             this.config.runtimeProvider === "container"
               ? containerName(run.id, this.config.runtimeInstanceId)
@@ -414,6 +521,9 @@ export class AgentService {
           if (!storedRun || !agent) return;
           storedRun.policyContextId = prepared.policyContextId;
           storedRun.runGrantId = prepared.runGrantId;
+          storedRun.mandateId = prepared.mandateId ?? null;
+          storedRun.ownerPrincipal = prepared.ownerPrincipal ?? agent.ownerPrincipal;
+          storedRun.agentPrincipal = prepared.agentPrincipal ?? agent.agentPrincipal;
           storedRun.capabilityFingerprint = prepared.capabilityFingerprint;
           storedRun.grantFingerprint = prepared.grantFingerprint;
           agent.activePolicyContextId = prepared.policyContextId;
@@ -438,7 +548,10 @@ export class AgentService {
         prompt: run.prompt,
         threadId: agentAtStart.codexThreadId,
         mandateFlowCapability: capability,
+        codexHomePath,
       });
+
+      if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
 
       if (this.config.mandateFlowEnabled && this.mandateFlow) {
         await this.store.mutate((database) => {
@@ -483,7 +596,8 @@ export class AgentService {
       });
     } catch (error) {
       const completedAt = now();
-      const cancelled = error instanceof RunCancelledError;
+      const cancelled =
+        error instanceof RunCancelledError || this.cancellationRequests.has(run.id);
       let message = redactRuntimeText(
         error instanceof Error ? error.message : String(error),
         this.config.groqApiKey,
@@ -540,6 +654,25 @@ export class AgentService {
   private async ensureMandateFlowReady(): Promise<void> {
     if (!this.mandateFlow || !(await this.mandateFlow.ready())) {
       throw new HttpError(503, "MandateFlow is unavailable; no secure Runtime was started");
+    }
+  }
+
+  private async ensureMandateContextUsable(agentId: string): Promise<void> {
+    const agent = this.getAgent(agentId);
+    if (!agent.activePolicyContextId || !this.mandateFlow?.summary) return;
+    const mandateId = this.store
+      .snapshot()
+      .runs.filter(
+        (run) => run.agentId === agentId && run.policyContextId === agent.activePolicyContextId,
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.mandateId;
+    if (!mandateId) return;
+    const summary = await this.mandateFlow.summary(mandateId);
+    if (summary.status === "REVOKED") {
+      throw new HttpError(
+        409,
+        "This mandate was revoked. Start a New secure workflow before sending another message",
+      );
     }
   }
 
@@ -611,6 +744,17 @@ export class AgentService {
       agent.updatedAt = now();
       return structuredClone(agent);
     });
+  }
+
+  private async cancelRevokedRun(agentId: string, runId: string): Promise<void> {
+    this.cancellationRequests.add(runId);
+    try {
+      await this.runner.cancel(runId);
+      const execution = this.activeExecutions.get(agentId);
+      if (execution) await execution;
+    } finally {
+      this.cancellationRequests.delete(runId);
+    }
   }
 
   private async cancelExecution(agentId: string): Promise<void> {

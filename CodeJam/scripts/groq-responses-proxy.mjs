@@ -1,6 +1,19 @@
 import http from "node:http";
 
 const maxRequestBytes = 4 * 1024 * 1024;
+const maxRateLimitRetries = 3;
+const maxRetryDelayMs = 120_000;
+const forwardedResponseHeaders = [
+  "cache-control",
+  "retry-after",
+  "x-ratelimit-limit-requests",
+  "x-ratelimit-limit-tokens",
+  "x-ratelimit-remaining-requests",
+  "x-ratelimit-remaining-tokens",
+  "x-ratelimit-reset-requests",
+  "x-ratelimit-reset-tokens",
+  "x-request-id",
+];
 const port = Number(process.env.GROQ_RESPONSES_PROXY_PORT || 34567);
 const upstream =
   (process.env.GROQ_UPSTREAM_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/+$/, "") +
@@ -46,6 +59,30 @@ function requestPath(request) {
   }
 }
 
+function retryDelayMs(response) {
+  const retryAfter = response.headers.get("retry-after")?.trim();
+  if (!retryAfter) return null;
+
+  const seconds = Number(retryAfter);
+  const delay = Number.isFinite(seconds)
+    ? seconds * 1_000
+    : Date.parse(retryAfter) - Date.now();
+  if (!Number.isFinite(delay)) return null;
+  return Math.min(Math.max(Math.ceil(delay) + 250, 250), maxRetryDelayMs);
+}
+
+async function fetchUpstreamWithRateLimitRetry(headers, body) {
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await fetch(upstream, { method: "POST", headers, body });
+    const delay = retryDelayMs(response);
+    if (response.status !== 429 || delay === null || attempt >= maxRateLimitRetries) {
+      return response;
+    }
+    await response.arrayBuffer();
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+}
+
 function json(response, statusCode, body) {
   response.writeHead(statusCode, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
@@ -82,16 +119,17 @@ const server = http.createServer(async (request, response) => {
     const headers = { "content-type": "application/json" };
     if (request.headers.authorization) headers.authorization = request.headers.authorization;
     if (request.headers.accept) headers.accept = request.headers.accept;
-    const upstreamResponse = await fetch(upstream, {
-      method: "POST",
+    const upstreamResponse = await fetchUpstreamWithRateLimitRetry(
       headers,
-      body: JSON.stringify(body),
-    });
+      JSON.stringify(body),
+    );
     response.statusCode = upstreamResponse.status;
     const contentType = upstreamResponse.headers.get("content-type");
     if (contentType) response.setHeader("content-type", contentType);
-    const cacheControl = upstreamResponse.headers.get("cache-control");
-    if (cacheControl) response.setHeader("cache-control", cacheControl);
+    for (const header of forwardedResponseHeaders) {
+      const value = upstreamResponse.headers.get(header);
+      if (value) response.setHeader(header, value);
+    }
     if (!upstreamResponse.body) {
       response.end();
       return;
