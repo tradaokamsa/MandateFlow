@@ -5,13 +5,13 @@
 **Status:** implementation decision and three-day build plan  
 **Date:** 30 August 2026  
 **Concept:** [`MANDATEFLOW.md`](./MANDATEFLOW.md)  
-**Implementation target:** [`CodeJam/`](./CodeJam/)  
+**Workspace layout:** [`CodeJam/`](../CodeJam/) plus sibling [`middleware/mandateflow/`](../middleware/mandateflow/)
 **P0 profile:** the starter's local container Runtime; ECS is out of scope
 
-This file intentionally sits outside `CodeJam/`, as requested. It is therefore
-not tracked by the starter's inner Git repository. After the design is accepted,
-copy the final concept, implementation plan and diagram assets into
-`CodeJam/docs/` before submission.
+This file intentionally sits outside `CodeJam/`, as requested. The Go
+middleware also lives outside the starter at the sibling
+`middleware/mandateflow/` path. The CodeJam scripts resolve that path by
+default and accept `MANDATEFLOW_DIR` for an independently checked-out layout.
 
 ---
 
