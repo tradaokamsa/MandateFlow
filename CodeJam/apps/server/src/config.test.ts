@@ -1,8 +1,14 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { loadConfig, writeCodexConfig } from "./config.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  DEFAULT_GROQ_BASE_URL,
+  DEFAULT_GROQ_MODEL,
+  isGroqConfigured,
+  loadConfig,
+  writeCodexConfig,
+} from "./config.js";
 
 const secureEnvironment = {
   NODE_ENV: "test",
@@ -54,5 +60,61 @@ describe("MandateFlow configuration", () => {
     expect(toml).toContain("http://mandateflow-gateway:3001/mcp");
     expect(toml).not.toContain(secureEnvironment.MANDATEFLOW_CONTROL_TOKEN);
     await rm(codexHome, { recursive: true, force: true });
+  });
+});
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
+    ),
+  );
+});
+
+describe("Groq configuration", () => {
+  it("defaults the model and requires only a non-placeholder API key", () => {
+    const unconfigured = loadConfig({ NODE_ENV: "test" });
+    expect(unconfigured.groqModel).toBe(DEFAULT_GROQ_MODEL);
+    expect(unconfigured.groqBaseUrl).toBe(DEFAULT_GROQ_BASE_URL);
+    expect(isGroqConfigured(unconfigured)).toBe(false);
+
+    for (const placeholder of ["", "   ", "replace-with-your-groq-api-key", "your-groq-api-key"]) {
+      expect(
+        isGroqConfigured(loadConfig({ NODE_ENV: "test", GROQ_API_KEY: placeholder })),
+      ).toBe(false);
+    }
+
+    const configured = loadConfig({ NODE_ENV: "test", GROQ_API_KEY: "gsk-test-key" });
+    expect(configured.groqModel).toBe(DEFAULT_GROQ_MODEL);
+    expect(isGroqConfigured(configured)).toBe(true);
+  });
+
+  it("writes the Groq Responses provider without persisting the API key", async () => {
+    const codexHome = await mkdtemp(path.join(tmpdir(), "launchpad-codex-"));
+    temporaryDirectories.push(codexHome);
+    const config = loadConfig({
+      NODE_ENV: "test",
+      CODEX_HOME: codexHome,
+      GROQ_API_KEY: "gsk-test-secret",
+      GROQ_MODEL: "openai/gpt-oss-20b",
+    });
+
+    await writeCodexConfig(config);
+    const codexConfig = await readFile(path.join(codexHome, "config.toml"), "utf8");
+
+    expect(codexConfig).toContain('model = "openai/gpt-oss-20b"');
+    expect(codexConfig).toContain('model_reasoning_summary = "none"');
+    expect(codexConfig).toContain("model_supports_reasoning_summaries = false");
+    expect(codexConfig).toContain('model_provider = "groq"');
+    expect(codexConfig).toContain('web_search = "disabled"');
+    expect(codexConfig).toContain("collab = false");
+    expect(codexConfig).toContain("multi_agent = false");
+    expect(codexConfig).toContain("[model_providers.groq]");
+    expect(codexConfig).toContain('base_url = "https://api.groq.com/openai/v1"');
+    expect(codexConfig).toContain('env_key = "GROQ_API_KEY"');
+    expect(codexConfig).toContain('wire_api = "responses"');
+    expect(codexConfig).not.toContain("gsk-test-secret");
   });
 });

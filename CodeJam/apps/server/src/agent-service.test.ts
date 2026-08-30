@@ -55,8 +55,8 @@ async function makeService(
     APP_DATA_DIR: path.join(root, "data"),
     AGENT_WORKSPACE_ROOT: path.join(root, "workspaces"),
     CODEX_HOME: path.join(root, "codex"),
-    ARK_API_KEY: "test-key",
-    ARK_MODEL: "ep-test",
+    GROQ_API_KEY: "gsk-test-key",
+    GROQ_MODEL: "",
     ...(mandateFlow
       ? {
           MANDATEFLOW_ENABLED: "true",
@@ -99,6 +99,20 @@ describe("Agent lifecycle", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
     expect(service.getAgent(agent.id).codexThreadId).toBe("fake-thread");
+  });
+
+  it("reports Groq system information without exposing the API key", async () => {
+    const service = await makeService();
+    const system = await service.systemInfo();
+
+    expect(system).toMatchObject({
+      groqConfigured: true,
+      groqBaseUrl: "https://api.groq.com/openai/v1",
+      groqModel: "openai/gpt-oss-120b",
+      codexAvailable: true,
+    });
+    expect(JSON.stringify(system)).not.toContain("gsk-test-key");
+    expect(system).not.toHaveProperty("arkConfigured");
   });
 
   it("atomically accepts only one concurrent run per Agent", async () => {

@@ -9,8 +9,8 @@ describe("Container Codex runner", () => {
   it("builds an isolated Docker/Podman-compatible invocation", () => {
     const config = loadConfig({
       NODE_ENV: "test",
-      ARK_API_KEY: "secret-that-must-not-appear-in-argv",
-      ARK_MODEL: "ep-test",
+      GROQ_API_KEY: "secret-that-must-not-appear-in-argv",
+      GROQ_MODEL: "openai/gpt-oss-20b",
       CODEX_HOME: "/tmp/codex-home",
       RUNTIME_PROVIDER: "container",
       CONTAINER_ENGINE: "podman",
@@ -44,6 +44,13 @@ describe("Container Codex runner", () => {
     expect(args).toContain("501:20");
     expect(args).toContain("workspace-write");
     expect(args).toContain("/workspace");
+    expect(args).toContain("GROQ_API_KEY");
+    expect(args).toContain("GROQ_UPSTREAM_BASE_URL");
+    expect(args).toContain("GROQ_RESPONSES_PROXY_PORT=34567");
+    expect(args.join(" ")).toContain("/opt/launchpad/groq-responses-proxy.mjs");
+    expect(args.join(" ")).toContain(
+      'model_providers.groq.base_url="http://127.0.0.1:34567/openai/v1"',
+    );
     expect(args).toContain("io.codejam.instance-id=test-instance");
     expect(args).toContain("io.codejam.run-id=run/unsafe");
     expect(args).toContain("mandateflow-test");

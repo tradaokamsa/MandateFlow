@@ -7,6 +7,8 @@ import {
   redactRuntimeOutput,
 } from "./codex-runner.js";
 import { RunCancelledError } from "./errors.js";
+import { GROQ_RESPONSES_PROXY_PORT } from "./groq-responses.js";
+import { redactRuntimeText } from "./trace.js";
 import type {
   AgentRunner,
   RunUsage,
@@ -75,7 +77,11 @@ export function buildContainerRunArgs(
     "--user",
     config.containerUser,
     "--env",
-    "ARK_API_KEY",
+    "GROQ_API_KEY",
+    "--env",
+    "GROQ_UPSTREAM_BASE_URL",
+    "--env",
+    "GROQ_RESPONSES_PROXY_PORT=" + GROQ_RESPONSES_PROXY_PORT,
     ...(config.mandateFlowEnabled ? ["--env", "MANDATEFLOW_RUN_CAPABILITY"] : []),
     "--env",
     "CODEX_HOME=/codex-home",
@@ -90,8 +96,16 @@ export function buildContainerRunArgs(
     "--workdir",
     "/workspace",
     config.containerRuntimeImage,
-    "codex",
-    ...buildCodexArgs(request, config.codexSandboxMode, "/workspace"),
+    "sh",
+    "-lc",
+    "node /opt/launchpad/groq-responses-proxy.mjs & proxy_pid=$!; trap 'kill $proxy_pid 2>/dev/null || true' EXIT; exec codex \"$@\"",
+    "launchpad-runtime",
+    ...buildCodexArgs(
+      request,
+      config.codexSandboxMode,
+      "/workspace",
+      "http://127.0.0.1:" + GROQ_RESPONSES_PROXY_PORT + "/openai/v1",
+    ),
   ];
 }
 
@@ -196,7 +210,10 @@ export class ContainerCodexRunner implements AgentRunner {
         stdout = lines.pop() ?? "";
         for (const line of lines) {
           parseCodexEventLine(
-            redactRuntimeOutput(line, request.mandateFlowCapability),
+            redactRuntimeText(
+              redactRuntimeOutput(line, request.mandateFlowCapability),
+              this.config.groqApiKey,
+            ),
             parsed,
           );
         }
@@ -222,7 +239,10 @@ export class ContainerCodexRunner implements AgentRunner {
       });
       if (stdout.trim()) {
         parseCodexEventLine(
-          redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
+          redactRuntimeText(
+            redactRuntimeOutput(stdout.trim(), request.mandateFlowCapability),
+            this.config.groqApiKey,
+          ),
           parsed,
         );
       }
@@ -236,7 +256,10 @@ export class ContainerCodexRunner implements AgentRunner {
       if (exitCode !== 0) {
         const detail =
           parsed.errors.at(-1) ??
-          redactRuntimeOutput(stderr.trim(), request.mandateFlowCapability) ??
+          redactRuntimeText(
+            redactRuntimeOutput(stderr.trim(), request.mandateFlowCapability),
+            this.config.groqApiKey,
+          ) ??
           "No error detail";
         throw new Error(
           this.config.containerEngine +
@@ -246,7 +269,10 @@ export class ContainerCodexRunner implements AgentRunner {
             detail,
         );
       }
-      const output = parsed.messages.at(-1)?.trim();
+      const output = redactRuntimeText(
+        redactRuntimeOutput(parsed.messages.at(-1)?.trim() ?? "", request.mandateFlowCapability),
+        this.config.groqApiKey,
+      );
       if (!output) throw new Error("Codex completed without an agent message");
       return {
         output,
@@ -262,7 +288,9 @@ export class ContainerCodexRunner implements AgentRunner {
 
   private childEnvironment(mandateFlowCapability = ""): NodeJS.ProcessEnv {
     const environment: NodeJS.ProcessEnv = {
-      ARK_API_KEY: this.config.arkApiKey,
+      GROQ_API_KEY: this.config.groqApiKey,
+      GROQ_UPSTREAM_BASE_URL: this.config.groqBaseUrl,
+      GROQ_RESPONSES_PROXY_PORT: String(GROQ_RESPONSES_PROXY_PORT),
       NO_COLOR: "1",
     };
     if (mandateFlowCapability) {

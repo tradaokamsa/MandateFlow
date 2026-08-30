@@ -45,6 +45,26 @@ describe("Codex runner protocol", () => {
     expect(args.slice(-3)).toEqual(["resume", "thread-123", "add tests"]);
   });
 
+  it("overrides the Groq provider URL without putting the API key in argv", () => {
+    const args = buildCodexArgs(
+      {
+        agentId: "agent",
+        workspacePath: "/tmp/workspace",
+        prompt: "build a calculator",
+        threadId: null,
+      },
+      "workspace-write",
+      "/tmp/workspace",
+      "http://127.0.0.1:45678/openai/v1",
+    );
+
+    expect(args.slice(0, 2)).toEqual([
+      "--config",
+      'model_providers.groq.base_url="http://127.0.0.1:45678/openai/v1"',
+    ]);
+    expect(args.join(" ")).not.toContain("gsk-secret-key");
+  });
+
   it("extracts the session, final message and usage", () => {
     const parsed = {
       messages: [] as string[],

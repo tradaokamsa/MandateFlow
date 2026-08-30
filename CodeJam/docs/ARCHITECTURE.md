@@ -1,7 +1,7 @@
 # Architecture
 
 MandateFlow keeps the starter's browser, Fastify orchestration, workspaces,
-Codex Runtime, and Ark inference path. A separate Go process is the reference
+Codex Runtime, and Groq inference path. A separate Go process is the reference
 monitor for five protected MCP operations.
 
 ```mermaid
@@ -13,7 +13,7 @@ flowchart LR
     Gateway --> GoStore["Go-owned SQLite<br/>contexts · runs · references · receipts · counters"]
     Service --> Runner["ContainerCodexRunner"]
     Runner --> Runtime["Disposable Codex Runtime"]
-    Runtime --> Ark["Volcengine Ark"]
+    Runtime --> Groq["Groq Responses API"]
     Runtime -->|Streamable HTTP MCP<br/>per-Run bearer| Gateway
     Gateway --> Fixtures["Embedded protected fixtures<br/>Support · Payments · Cases · CRM"]
 ```

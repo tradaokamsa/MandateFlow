@@ -454,14 +454,14 @@ export default function App() {
           <span className="eyebrow">Runtime</span>
           <strong>{system?.runtime ?? "Checking…"}</strong>
           <span>
-            {system?.arkModel ?? "Ark model not configured"}
+            {system?.groqModel ?? "Groq model not configured"}
             {system?.containerEngine ? " · " + system.containerEngine : ""}
           </span>
         </div>
       </aside>
 
       <main className="main">
-        {!system?.arkConfigured ||
+        {!system?.groqConfigured ||
         !system?.codexAvailable ||
         (system?.mandateFlowEnabled && !system.mandateFlowReady) ? (
           <div className="config-banner">
@@ -469,8 +469,8 @@ export default function App() {
             <div>
               <strong>Runtime configuration needed</strong>
               <p>
-                {!system?.arkConfigured
-                  ? "Set ARK_API_KEY and ARK_MODEL in .env before using the Playground."
+                {!system?.groqConfigured
+                  ? "Set GROQ_API_KEY in .env before using the Playground; GROQ_MODEL is optional."
                   : system?.mandateFlowEnabled && !system.mandateFlowReady
                     ? "The Go MandateFlow sidecar is unavailable. Secure Runs fail closed until it is ready."
                   : system.runtimeProvider === "container"

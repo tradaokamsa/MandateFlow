@@ -97,9 +97,9 @@ export interface MandateEvidence {
 }
 
 export interface SystemInfo {
-  arkConfigured: boolean;
-  arkBaseUrl: string;
-  arkModel: string | null;
+  groqConfigured: boolean;
+  groqBaseUrl: string;
+  groqModel: string | null;
   codexAvailable: boolean;
   codexSandboxMode: string;
   runtimeProvider: "local-process" | "container";

@@ -35,9 +35,9 @@ locals {
     "PUBLIC_PORT=80",
     "LOG_LEVEL=info",
     "APP_AUTH_TOKEN=${var.app_auth_token}",
-    "ARK_API_KEY=${var.ark_api_key}",
-    "ARK_MODEL=${var.ark_model}",
-    "ARK_BASE_URL=${var.ark_base_url}",
+    "GROQ_API_KEY=${var.groq_api_key}",
+    "GROQ_MODEL=${var.groq_model}",
+    "GROQ_BASE_URL=${var.groq_base_url}",
     "APP_DATA_DIR=/app/data",
     "AGENT_WORKSPACE_ROOT=/app/workspaces",
     "CODEX_HOME=/app/codex-home",
@@ -86,7 +86,7 @@ resource "volcenginecc_vpc_security_group" "launchpad" {
   ingress_permissions = local.ingress_permissions
   egress_permissions = [
     {
-      description     = "Outbound access for Ark, Git and package registries"
+      description     = "Outbound access for Groq, Git and package registries"
       direction       = "egress"
       policy          = "accept"
       port_end        = -1

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AppConfig } from "./config.js";
-import { isArkConfigured } from "./config.js";
+import { isGroqConfigured } from "./config.js";
 import { HttpError, RunCancelledError } from "./errors.js";
 import { containerName } from "./container-codex-runner.js";
 import {
@@ -8,6 +8,7 @@ import {
   type MandateFlowControl,
 } from "./mandateflow-client.js";
 import { JsonStore } from "./store.js";
+import { redactRuntimeText } from "./trace.js";
 import type {
   Agent,
   AgentRun,
@@ -254,9 +255,9 @@ export class AgentService {
   async systemInfo(): Promise<Record<string, unknown>> {
     const mandateFlowHealth = await this.healthInfo();
     return {
-      arkConfigured: isArkConfigured(this.config),
-      arkBaseUrl: this.config.arkBaseUrl,
-      arkModel: this.config.arkModel || null,
+      groqConfigured: isGroqConfigured(this.config),
+      groqBaseUrl: this.config.groqBaseUrl,
+      groqModel: this.config.groqModel || null,
       codexAvailable: await this.runner.isAvailable(),
       codexSandboxMode: this.config.codexSandboxMode,
       runtimeProvider: this.config.runtimeProvider,
@@ -281,10 +282,10 @@ export class AgentService {
     retryOfRunId: string | null,
     createUserMessage: boolean,
   ): Promise<{ run: AgentRun; message: Message | null }> {
-    if (!isArkConfigured(this.config)) {
+    if (!isGroqConfigured(this.config)) {
       throw new HttpError(
         503,
-        "Ark is not configured. Set ARK_API_KEY and ARK_MODEL, then restart.",
+        "Groq is not configured. Set GROQ_API_KEY; GROQ_MODEL is optional, then restart.",
       );
     }
     if (this.config.mandateFlowEnabled) {
@@ -461,7 +462,8 @@ export class AgentService {
         const agent = database.agents.find((item) => item.id === agentAtStart.id);
         if (!storedRun || !agent) return;
         storedRun.status = "completed";
-        storedRun.output = result.output;
+        const output = redactRuntimeText(result.output, this.config.groqApiKey);
+        storedRun.output = output;
         storedRun.usage = result.usage;
         storedRun.completedAt = completedAt;
         storedRun.runtimeInstanceId = result.runtimeInstanceId;
@@ -471,7 +473,7 @@ export class AgentService {
           agentId: agent.id,
           runId: run.id,
           role: "assistant",
-          content: result.output,
+          content: output,
           createdAt: completedAt,
         });
         agent.status = "ready";
@@ -482,7 +484,10 @@ export class AgentService {
     } catch (error) {
       const completedAt = now();
       const cancelled = error instanceof RunCancelledError;
-      let message = error instanceof Error ? error.message : String(error);
+      let message = redactRuntimeText(
+        error instanceof Error ? error.message : String(error),
+        this.config.groqApiKey,
+      );
       if (mandatePrepared && !mandateTerminal && !securityFinalizationPending) {
         try {
           await this.finishMandate(run.id, cancelled ? "CANCELLED" : "FAILED");
