@@ -21,6 +21,10 @@ The Go gateway owns the policy decision, server-side reference lineage, and
 redacted receipts. The browser and the model never decide whether a protected
 cross-tool flow is safe.
 
+> The same Agent, with the same CRM permission, calling the same CRM method is
+> allowed or denied based solely on the trusted provenance of its input — and
+> recreating the Runtime cannot erase that provenance.
+
 ## Judge's fast path
 
 The intended judging path is one local command, one browser scenario, and less
@@ -46,6 +50,14 @@ export GROQ_API_KEY='your-real-groq-api-key'
 export GROQ_MODEL='openai/gpt-oss-120b'
 npm run poc
 ```
+
+> **Test this on your own key before the live demo.** On a free/on-demand
+> Groq tier, `gpt-oss-120b` can return HTTP `413 Request too large` (a single
+> Codex turn with the full tool schema runs ~9,100 tokens, above that tier's
+> 8,000 TPM cap) — `gpt-oss-20b` fit under that specific cap in our testing.
+> This is a per-account rate limit, not a code defect, so a higher tier or a
+> different key may not hit it at all. Run the coding prompt once before
+> judging to confirm your key/model combination.
 
 The launcher installs dependencies when needed, builds the Go sidecar and
 starts a disposable Codex Runtime backed by Groq, creates an instance network,
@@ -84,6 +96,15 @@ npm run poc
    and policy context.
 5. In the proof console, select **Run MandateFlow proof**. Wait for the Run to
    complete, then open the decision journal and expand the receipts.
+   > The proof calls five protected tools in one turn. In one test run this
+   > tripped `output_parse_failed` on `gpt-oss-20b` via the live `container`
+   > Runtime — consistent with reports of `tool_use_failed` on long tool
+   > chains for Groq's gpt-oss models, though we only reproduced it once and
+   > it may be model/tier/account dependent. If it happens on your key,
+   > restart with `RUNTIME_PROVIDER=fixture` (no Groq key needed) — it drives
+   > the identical Go Gateway/SQLite path through a deterministic script and
+   > is the reliable fallback for judging if the live model path is flaky on
+   > the day.
 6. Select **Retry denied call** and show that the Payment-derived CRM call is
    denied again with fresh Run authority but the same policy context and
    lineage.
@@ -289,6 +310,37 @@ unchanged CRM counter, denial receipt IDs, and the fresh post-revocation
 context. It is separate from `npm run check` because it starts the local POC;
 the default fixture path does not require a model request. Set
 `RUNTIME_PROVIDER=container` to run the optional live Codex/Groq variant.
+
+### What the Gateway actually decided — one real run
+
+`GET /api/runs/:id/evidence` from a completed proof Run, trimmed to the
+field that matters per protected call:
+
+```json
+{
+  "crmCounter": 2,
+  "receipts": [
+    { "tool": "support.list_tickets",      "decision": "ALLOW", "ruleId": null },
+    { "tool": "cases.lookup_subject",      "decision": "ALLOW", "ruleId": null },
+    { "tool": "crm.resolve_customer",      "decision": "ALLOW", "ruleId": null },
+    { "tool": "payments.list_failures",    "decision": "ALLOW", "ruleId": null },
+    { "tool": "cases.lookup_subject",      "decision": "ALLOW", "ruleId": null },
+    { "tool": "crm.resolve_customer",      "decision": "DENY",  "ruleId": "NO_PAYMENT_REIDENTIFICATION",
+      "reason": "Payment-derived references are aggregate-only and cannot be resolved through CRM" },
+    { "tool": "payments.aggregate_failures","decision": "ALLOW", "ruleId": null },
+    { "tool": "support.list_tickets",      "decision": "ALLOW", "ruleId": null },
+    { "tool": "cases.lookup_subject",      "decision": "ALLOW", "ruleId": null },
+    { "tool": "crm.resolve_customer",      "decision": "ALLOW", "ruleId": null }
+  ]
+}
+```
+
+Ten calls to the same protected tool set, one policy context. The single
+`DENY` sits between two identical-looking `crm.resolve_customer` calls —
+same tool, same permission, same public reference type — and the receipt
+names the exact rule and the reason. `crmCounter: 2` confirms the denied
+call never reached the fixture: only the two Support-derived resolutions
+incremented it.
 
 ## Honest scope
 
