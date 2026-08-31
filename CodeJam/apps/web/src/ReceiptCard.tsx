@@ -34,11 +34,16 @@ export function ReceiptCard({
       <details open={expanded}>
         <summary
           className="receipt-summary"
+          aria-expanded={expanded}
+          aria-controls={`receipt-details-${receipt.id}`}
           onClick={(event) => {
             event.preventDefault();
             onToggle(expanded ? null : receipt.id);
           }}
         >
+          <span className="receipt-disclosure" aria-hidden="true">
+            {expanded ? "−" : "+"}
+          </span>
           <span className="receipt-summary-main">
             <strong>{receipt.tool}</strong>
             <span className="receipt-reason">{receipt.reason}</span>
@@ -48,6 +53,7 @@ export function ReceiptCard({
               {receipt.decision === "ALLOW" ? "✓" : "×"}
             </span>
             <span>{receipt.decision === "ALLOW" ? "Allowed" : "Blocked"}</span>
+            <span className="receipt-disclosure-copy">{expanded ? "Hide" : "Details"}</span>
           </span>
         </summary>
 
@@ -63,7 +69,7 @@ export function ReceiptCard({
           )}
         </div>
 
-        <div className="receipt-details">
+        <div className="receipt-details" id={`receipt-details-${receipt.id}`}>
           <dl>
             <div>
               <dt>Receipt</dt>

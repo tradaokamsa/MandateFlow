@@ -58,6 +58,8 @@ describe("ReceiptCard", () => {
     expect(markup).toContain("Policy rule");
     expect(markup).toContain("payments.list_failures");
     expect(markup).toContain("CRM 1 → 1 · not invoked");
+    expect(markup).toContain('aria-expanded="true"');
+    expect(markup).toContain("Hide");
   });
 
   it("does not invent a rule label for an allowed receipt", () => {
@@ -85,6 +87,8 @@ describe("ReceiptCard", () => {
     expect(markup).not.toContain("Rule:");
     expect(markup).not.toContain("Policy rule");
     expect(markup).toContain("CRM 0 → 1 · invoked");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("Details");
   });
 
   it("shows a deliberate unavailable state for missing causal evidence", () => {

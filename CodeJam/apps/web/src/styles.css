@@ -2448,3 +2448,240 @@ select:focus-visible {
     padding-right: 14px;
   }
 }
+
+/* Interaction refinements: keep the paper/rail visual language, but make the
+   primary controls readable and let evidence grow in the document flow. */
+:root {
+  --z-dropdown: 200;
+  --z-popover: 300;
+  --z-backdrop: 500;
+  --z-dialog: 600;
+}
+
+.auth-card > button {
+  width: 100%;
+}
+
+.secret-input {
+  width: 100%;
+}
+
+.secret-input input {
+  width: 100%;
+  min-height: 48px;
+  padding-right: 82px;
+  font-size: 14px;
+}
+
+.auth-card .secret-toggle {
+  width: auto;
+  min-width: 56px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 11px;
+  z-index: 1;
+  font-size: 11px;
+}
+
+.auth-card h1 {
+  font-size: 30px;
+}
+
+.auth-card p {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+label {
+  font-size: 12px;
+}
+
+input,
+textarea,
+select {
+  font-size: 13px;
+}
+
+input {
+  height: 44px;
+}
+
+select {
+  height: 44px;
+  min-height: 44px;
+  margin-top: 8px;
+  border: 1px solid #d3d0c7;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  appearance: auto;
+}
+
+.field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  border: 1px solid #edc4c0;
+  border-radius: 9px;
+  padding: 9px 11px;
+  color: #9b4040;
+  background: #fff1ef;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.error-banner button,
+.settings-title button,
+.modal-heading button {
+  width: auto;
+  min-width: 34px;
+  min-height: 34px;
+  border-radius: 8px;
+}
+
+.error-banner button:hover,
+.settings-title button:hover,
+.modal-heading button:hover {
+  background: rgba(105, 84, 217, 0.09);
+}
+
+.playground {
+  height: auto;
+  min-height: calc(100vh - 150px);
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+}
+
+.playground-topbar,
+.fixture-notice,
+.proof-console,
+.workflow-status,
+.playground-context,
+.composer {
+  flex: 0 0 auto;
+}
+
+.playground-context {
+  max-height: none;
+  overflow: visible;
+}
+
+.messages {
+  flex: 1 1 360px;
+  min-height: 360px;
+  max-height: min(58vh, 680px);
+}
+
+.receipt-timeline {
+  max-height: none;
+  overflow: visible;
+  scrollbar-gutter: auto;
+}
+
+.receipt-summary {
+  border-radius: 8px;
+  transition: background 150ms ease;
+}
+
+.receipt-summary:hover {
+  background: #f7f5ef;
+}
+
+.receipt-summary-main {
+  flex: 1 1 auto;
+}
+
+.receipt-summary-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.receipt-disclosure {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #c7c2b8;
+  border-radius: 6px;
+  color: #55449e;
+  background: #f1efff;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.receipt-disclosure-copy {
+  color: #55449e;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.receipt-summary:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline-offset: -2px;
+}
+
+.mobile-switcher-backdrop {
+  z-index: var(--z-backdrop);
+  overflow: auto;
+}
+
+.mobile-switcher {
+  max-height: none;
+  overflow: visible;
+}
+
+.modal-backdrop {
+  z-index: var(--z-backdrop);
+}
+
+.modal {
+  position: relative;
+  z-index: var(--z-dialog);
+}
+
+.fixture-notice {
+  flex-wrap: wrap;
+  row-gap: 3px;
+  font-size: 11px;
+}
+
+.fixture-notice strong {
+  font-size: 10px;
+}
+
+.proof-action-note,
+.run-progress-copy span,
+.run-stall-notice {
+  line-height: 1.45;
+}
+
+@media (max-width: 680px) {
+  .sidebar .agent-list {
+    display: none;
+  }
+
+  .playground {
+    min-height: 0;
+  }
+
+  .messages {
+    min-height: 300px;
+    max-height: 58vh;
+  }
+
+  .receipt-summary-state > span:nth-child(2) {
+    display: none;
+  }
+
+  .receipt-disclosure-copy {
+    font-size: 8px;
+  }
+}

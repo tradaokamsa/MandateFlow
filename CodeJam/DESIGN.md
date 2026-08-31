@@ -71,6 +71,11 @@ work, and a visible stop action while a Run is active. This is the primary
 feedback pattern for long-running or model-backed work; a spinner alone is not
 enough.
 
+The Playground grows with mandate metadata and receipt details. The conversation
+transcript is the intentional bounded scroll region; evidence and disclosures
+must expand in normal document flow so opening a receipt never traps the user in
+a nested panel.
+
 ## Elevation & Shapes
 
 Use the existing paper panels, subtle shadows, 10px control radius, and 14px
@@ -92,6 +97,10 @@ color, and configuration failures explain the correction: set `GROQ_API_KEY`;
   last Runtime event arrived.
 - **Do:** Make stalled work recoverable with a clear stop action and explain
   what the user can do next.
+- **Do:** Keep validation and mutation failures beside the form or confirmation
+  action that can recover them.
+- **Do:** Give native disclosure and select controls a visible label and enough
+  geometry to read as interactive.
 - **Do:** Reuse existing spacing, typography, focus, and button patterns.
 - **Don't:** Display API keys, raw provider errors, or secret-bearing runtime output.
 - **Don't:** Turn a small setup change into a separate provider dashboard.

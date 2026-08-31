@@ -57,20 +57,23 @@
 
 | Operation | Trigger | Pending | Success destination | Success feedback | Failure recovery | Focus outcome | Source ref |
 |---|---|---|---|---|---|---|---|
-| Create Agent | Create Agent form | Disable submit | Selected Agent Playground | Agent appears in sidebar | Preserve form and show alert | Modal remains open on failure | `apps/web/src/App.tsx` |
-| Edit Agent | Settings form | Disable submit | Same Playground | Updated configuration | Preserve form and show alert | Keep settings open on failure | `apps/web/src/App.tsx` |
+| Create Agent | Create Agent form | Disable submit | Selected Agent Playground | Agent appears in sidebar | Preserve form and show inline alert | Modal remains open on failure | `apps/web/src/App.tsx` |
+| Edit Agent | Settings form | Disable submit | Same Playground | Updated configuration | Preserve form and show inline alert | Keep settings open on failure | `apps/web/src/App.tsx` |
 | Revoke mandate | Mandate Summary action | App-owned confirmation, then disable action | Same Playground with evidence retained | Inline revoked/cancelled status | Keep summary and explain failure | Return focus to summary action | GitHub issue #8 |
 | Run activity | Send / proof / retry action | Timestamped queued, authorization, Runtime, tool, and finalization events | Same Playground with result or recovery state | Current phase, recent activity, and terminal status | Explain stale Runtime and offer Stop run | Keep activity region in view | `apps/server/src/types.ts` |
 | New secure workflow | Explicit header action | Disable while busy or an active Run exists | Same Playground with cleared thread association | Fresh-workflow status; proof returns to pending | Keep prior evidence until action succeeds | Focus remains in header | GitHub issue #8 |
-| Delete Agent | Delete action | Existing confirmation flow | Agent list | Agent removed and workspace archived | Show error | Focus moves to selected list item | `apps/web/src/App.tsx` |
+| Delete Agent | Delete action | Confirmation remains open while deleting | Agent list | Agent removed and workspace archived | Keep confirmation open and show error | Focus moves to selected list item | `apps/web/src/App.tsx` |
 
 ## Navigation and responsive behavior
 
 - The dark sidebar becomes a compact header strip on narrow screens; the
-  accessible Agent switcher opens as a bounded dialog with a visible close action
-  and focus restoration.
+  accessible Agent switcher opens with a visible close action and focus
+  restoration. The backdrop owns overflow so the switcher itself can grow with
+  the Agent list.
 - Mandate metadata wraps from four columns to two; long principals use a truncated visible value with a full-value tooltip.
 - The Playground keeps evidence visible after cancellation or revocation.
+- The Playground expands as mandate metadata or receipt details open. Only the
+  conversation transcript owns a bounded vertical scroll region.
 - The proof rows collapse from four columns to one without hiding their labels or
   pending/verified state.
 
@@ -92,7 +95,8 @@
 ## Validation
 
 - Schema layer: Fastify Zod schemas and Go strict JSON decoding.
-- Trigger timing: on submit; native browser bubbles are disabled with `noValidate`.
+- Trigger timing: on submit; native browser bubbles are disabled with `noValidate`,
+  so the app owns the inline validation message and focus target.
 - Sensitive-value handling: capabilities, private references, customer data, credentials, and fixture IDs are never rendered in the summary or receipts.
 
 ## Permission and clipboard
