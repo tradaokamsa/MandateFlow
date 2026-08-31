@@ -25,10 +25,27 @@ codex_sandbox_mode="${CODEX_SANDBOX_MODE:-workspace-write}"
 mandateflow_image="${MANDATEFLOW_IMAGE:-mandateflow-sidecar:local}"
 mandateflow_go_image="${MANDATEFLOW_GO_IMAGE:-golang:1.23-bookworm}"
 mandateflow_control_port="${MANDATEFLOW_CONTROL_HOST_PORT:-3002}"
+runtime_provider="${RUNTIME_PROVIDER:-}"
+groq_key_is_usable() {
+  local key="${GROQ_API_KEY:-}"
+  [[ -n "$key" ]] && [[ ! "$key" =~ ^(replace|your|placeholder|change|xxx+)([-_[:space:]]|$) ]]
+}
+if [[ -z "$runtime_provider" || "$runtime_provider" == "local-process" ]]; then
+  if groq_key_is_usable; then
+    runtime_provider="container"
+  else
+    runtime_provider="fixture"
+  fi
+fi
 
 log() {
   printf '[local-poc] %s\n' "$*" >&2
 }
+
+if [[ "$runtime_provider" != "container" && "$runtime_provider" != "fixture" ]]; then
+  log "npm run poc supports RUNTIME_PROVIDER=container or RUNTIME_PROVIDER=fixture."
+  exit 2
+fi
 
 if [[ ! -d "$mandateflow_dir" ]]; then
   log "MandateFlow module was not found at $mandateflow_dir."
@@ -85,9 +102,9 @@ detect_engine() {
   return 1
 }
 
-if [[ -z "${GROQ_API_KEY:-}" ]]; then
+if [[ "$runtime_provider" == "container" ]] && ! groq_key_is_usable; then
   log "GROQ_API_KEY is required. GROQ_MODEL is optional."
-  log "Example: GROQ_API_KEY=key GROQ_MODEL=openai/gpt-oss-120b ./scripts/start-local-poc.sh"
+  log "Use RUNTIME_PROVIDER=fixture for the credential-free deterministic proof."
   exit 2
 fi
 
@@ -111,6 +128,7 @@ fi
 
 engine="$(detect_engine)"
 log "Using $engine as the Agent Runtime engine."
+log "Runtime provider: $runtime_provider"
 
 if [[ ! -d node_modules ]]; then
   log "Installing application dependencies."
@@ -192,39 +210,41 @@ log "Building and testing the Go MandateFlow reference monitor."
   --tag "$mandateflow_image" \
   "$mandateflow_dir"
 
-log "Building $runtime_image from Dockerfile.runtime (base: $runtime_base_image)."
-"$engine" build \
-  --file Dockerfile.runtime \
-  --build-arg "NODE_IMAGE=$runtime_base_image" \
-  --build-arg "DEBIAN_MIRROR=$runtime_apt_mirror" \
-  --build-arg "DEBIAN_SECURITY_MIRROR=$runtime_apt_security_mirror" \
-  --build-arg "RUNTIME_APT_PACKAGES=$runtime_apt_packages" \
-  --tag "$runtime_image" \
-  .
+if [[ "$runtime_provider" == "container" ]]; then
+  log "Building $runtime_image from Dockerfile.runtime (base: $runtime_base_image)."
+  "$engine" build \
+    --file Dockerfile.runtime \
+    --build-arg "NODE_IMAGE=$runtime_base_image" \
+    --build-arg "DEBIAN_MIRROR=$runtime_apt_mirror" \
+    --build-arg "DEBIAN_SECURITY_MIRROR=$runtime_apt_security_mirror" \
+    --build-arg "RUNTIME_APT_PACKAGES=$runtime_apt_packages" \
+    --tag "$runtime_image" \
+    .
 
-log "Checking that the Runtime can bind-mount the configured state directories."
-preflight_user_args=(--user "$CONTAINER_USER")
-if [[ "$(basename "$engine")" == "podman" ]]; then
-  preflight_user_args+=(--userns keep-id)
-fi
-if ! "$engine" run --rm \
-  "${preflight_user_args[@]}" \
-  --mount "type=bind,src=$AGENT_WORKSPACE_ROOT,dst=/workspace" \
-  --mount "type=bind,src=$CODEX_HOME,dst=/codex-home" \
-  "$runtime_image" sh -lc \
-    'touch /workspace/.launchpad-write-test /codex-home/.launchpad-write-test && rm /workspace/.launchpad-write-test /codex-home/.launchpad-write-test'; then
-  log "The container engine cannot mount $local_state_root."
-  log "Set LOCAL_POC_DATA_ROOT to a directory shared with Docker/Colima/Podman."
-  exit 2
-fi
+  log "Checking that the Runtime can bind-mount the configured state directories."
+  preflight_user_args=(--user "$CONTAINER_USER")
+  if [[ "$(basename "$engine")" == "podman" ]]; then
+    preflight_user_args+=(--userns keep-id)
+  fi
+  if ! "$engine" run --rm \
+    "${preflight_user_args[@]}" \
+    --mount "type=bind,src=$AGENT_WORKSPACE_ROOT,dst=/workspace" \
+    --mount "type=bind,src=$CODEX_HOME,dst=/codex-home" \
+    "$runtime_image" sh -lc \
+      'touch /workspace/.launchpad-write-test /codex-home/.launchpad-write-test && rm /workspace/.launchpad-write-test /codex-home/.launchpad-write-test'; then
+    log "The container engine cannot mount $local_state_root."
+    log "Set LOCAL_POC_DATA_ROOT to a directory shared with Docker/Colima/Podman."
+    exit 2
+  fi
 
-if [[ "$codex_sandbox_mode" == "workspace-write" ]] \
-  && ! "$engine" run --rm "$runtime_image" \
-    codex sandbox linux --full-auto -- true >/dev/null 2>&1; then
-  log "Codex Landlock is unavailable in this Linux Runtime."
-  log "Falling back to danger-full-access inside the disposable container boundary."
-  log "Do not mount unrelated secrets or host directories into the Agent Runtime."
-  codex_sandbox_mode=danger-full-access
+  if [[ "$codex_sandbox_mode" == "workspace-write" ]] \
+    && ! "$engine" run --rm "$runtime_image" \
+      codex sandbox linux --full-auto -- true >/dev/null 2>&1; then
+    log "Codex Landlock is unavailable in this Linux Runtime."
+    log "Falling back to danger-full-access inside the disposable container boundary."
+    log "Do not mount unrelated secrets or host directories into the Agent Runtime."
+    codex_sandbox_mode=danger-full-access
+  fi
 fi
 
 log "Creating the instance-specific Runtime network."
@@ -237,8 +257,16 @@ export MANDATEFLOW_CONTROL_TOKEN="$(node -e 'const c=require("node:crypto");proc
 export MANDATEFLOW_RUN_TTL_MS="$((${CODEX_TIMEOUT_MS:-600000} + 60000))"
 export MANDATEFLOW_ENABLED=true
 export MANDATEFLOW_CONTROL_URL="http://127.0.0.1:$mandateflow_control_port"
-export MANDATEFLOW_RUNTIME_MCP_URL="http://mandateflow-gateway:3001/mcp"
 export MANDATEFLOW_CONTROL_HOST_PORT="$mandateflow_control_port"
+
+sidecar_publish_args=(--publish "127.0.0.1:$mandateflow_control_port:3002")
+if [[ "$runtime_provider" == "fixture" ]]; then
+  runtime_mcp_host_port="${MANDATEFLOW_RUNTIME_MCP_HOST_PORT:-3001}"
+  export MANDATEFLOW_RUNTIME_MCP_URL="http://127.0.0.1:$runtime_mcp_host_port/mcp"
+  sidecar_publish_args+=(--publish "127.0.0.1:$runtime_mcp_host_port:3001")
+else
+  export MANDATEFLOW_RUNTIME_MCP_URL="http://mandateflow-gateway:3001/mcp"
+fi
 
 sidecar_user_args=(--user "$CONTAINER_USER")
 if [[ "$(basename "$engine")" == "podman" ]]; then
@@ -252,7 +280,7 @@ log "Starting the Go MandateFlow sidecar."
   --label "io.codejam.instance-id=$RUNTIME_INSTANCE_ID" \
   --network "$MANDATEFLOW_CONTAINER_NETWORK" \
   --network-alias mandateflow-gateway \
-  --publish "127.0.0.1:$mandateflow_control_port:3002" \
+  "${sidecar_publish_args[@]}" \
   "${sidecar_user_args[@]}" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
@@ -282,7 +310,7 @@ export NODE_ENV=production
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-3000}"
 export CODEX_SANDBOX_MODE="$codex_sandbox_mode"
-export RUNTIME_PROVIDER=container
+export RUNTIME_PROVIDER="$runtime_provider"
 export CONTAINER_ENGINE="$engine"
 export CONTAINER_RUNTIME_IMAGE="$runtime_image"
 

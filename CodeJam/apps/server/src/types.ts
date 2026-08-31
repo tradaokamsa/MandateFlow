@@ -43,6 +43,61 @@ export interface RunUsage {
   outputTokens?: number;
 }
 
+export type RunProgressStage = "queued" | "phase" | "tool" | "complete" | "error" | "cancelled";
+export type RuntimeSessionEventKind =
+  | "status"
+  | "plan"
+  | "command"
+  | "file_change"
+  | "mcp"
+  | "assistant"
+  | "error";
+export type RuntimeSessionEventState =
+  | "started"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface RuntimeSessionSafeMetadata {
+  paths?: string[];
+  durationMs?: number;
+  tool?: string;
+}
+
+/**
+ * Safe, persisted activity for one Agent Run. The stage/label fields are kept
+ * as compatibility aliases for older clients and are always derived from the
+ * canonical kind/state/title fields by the server.
+ */
+export interface RuntimeSessionEvent {
+  id: string;
+  runId: string;
+  sequence: number;
+  kind: RuntimeSessionEventKind;
+  state: RuntimeSessionEventState;
+  title: string;
+  detail: string;
+  stage: RunProgressStage;
+  label: string;
+  safeMetadata?: RuntimeSessionSafeMetadata;
+  createdAt: string;
+}
+
+export type RunProgressEvent = RuntimeSessionEvent;
+
+/** Runner callbacks accept the legacy aliases so existing integrations remain
+ * source-compatible while new events use the typed session fields. */
+export interface RunnerProgressEvent {
+  stage: RunProgressStage;
+  label: string;
+  detail: string;
+  kind?: RuntimeSessionEventKind;
+  state?: RuntimeSessionEventState;
+  title?: string;
+  safeMetadata?: RuntimeSessionSafeMetadata;
+}
+
 export interface AgentRun {
   id: string;
   agentId: string;
@@ -63,11 +118,12 @@ export interface AgentRun {
   capabilityFingerprint: string | null;
   grantFingerprint: string | null;
   runtimeInstanceId: string | null;
+  progress: RunProgressEvent[];
   createdAt: string;
 }
 
 export interface Database {
-  version: 3;
+  version: 4;
   agents: Agent[];
   messages: Message[];
   runs: AgentRun[];
@@ -101,6 +157,7 @@ export interface RunnerRequest {
   threadId: string | null;
   mandateFlowCapability: string;
   codexHomePath?: string;
+  onProgress?: (event: RunnerProgressEvent) => void;
 }
 
 export interface AgentRunner {

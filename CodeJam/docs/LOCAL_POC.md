@@ -1,8 +1,10 @@
 # Local POC
 
 The submitted local profile runs React/Fastify plus a Go MandateFlow sidecar on
-macOS or Linux and starts every Codex turn in a disposable Docker, Colima, or
-Podman container. Only the Groq model API is remote.
+macOS or Linux. With no usable Groq key, it runs a deterministic fixture Runtime
+that still crosses the Node → Streamable HTTP MCP → Go → SQLite → UI/API path.
+With a key, it can start every Codex turn in a disposable Docker, Colima, or
+Podman container and use the Groq model API.
 
 ## Start
 
@@ -10,12 +12,25 @@ Requirements:
 
 - Node.js 22+
 - Docker, Colima, or Podman
-- A Groq API key; `GROQ_MODEL` is optional
+- A Groq API key only for the optional live `container` profile
 
 ```bash
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
-GROQ_API_KEY=your-groq-api-key npm run poc
+npm run poc
 ```
+
+The launcher selects `fixture` when `GROQ_API_KEY` is missing or still a
+placeholder. To use the live Codex path, set both values explicitly:
+
+```bash
+RUNTIME_PROVIDER=container \
+GROQ_API_KEY=your-groq-api-key \
+npm run poc
+```
+
+Fixture mode is proof-only. It is the fastest way to rehearse the secure
+MandateFlow evidence flow without model credentials; use the `container`
+profile when the Agent must inspect or change workspace code.
 
 Open <http://localhost:3000> and unlock with `APP_AUTH_TOKEN`. Press `Ctrl+C` to
 stop the server and remove this instance's remaining Runtime containers,
@@ -42,10 +57,13 @@ Default limits are 2 CPUs, 2 GiB memory, 256 processes, dropped capabilities,
 and `no-new-privileges`.
 
 The startup script creates an instance-specific bridge network. The Go control
-listener is published only on `127.0.0.1:3002`; the MCP listener is not
-published to the host and is reachable by Runtime containers only through the
-`mandateflow-gateway` network alias. Runtime containers receive the per-Run
-capability environment variable but not the Go control token or browser token.
+listener is published only on `127.0.0.1:3002`. In the live `container` profile,
+the MCP listener is private to the network and reachable by Runtime containers
+through the `mandateflow-gateway` alias. In the credential-free `fixture`
+profile, the MCP listener is additionally published on a loopback-only host
+port so the Node fixture runner can traverse the same HTTP boundary. Live
+Runtime containers receive the per-Run capability environment variable but not
+the Go control token or browser token.
 
 Codex requests `workspace-write`. If the Linux kernel lacks Landlock, startup
 warns and disables only the inner Codex sandbox. The outer container limits
@@ -100,6 +118,7 @@ podman run --rm docker.io/library/alpine:3.20 echo PODMAN_OK
 ```bash
 CONTAINER_ENGINE=podman \
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
+RUNTIME_PROVIDER=container \
 GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
@@ -113,6 +132,7 @@ build.
 ```bash
 CONTAINER_RUNTIME_APT_PACKAGES='ca-certificates git ripgrep python3 build-essential' \
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
+RUNTIME_PROVIDER=container \
 GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
@@ -141,15 +161,23 @@ The system response must report `mandateFlowEnabled: true` and
 remain visible but new secure Runs and retries fail with `503`; no Runtime is
 started.
 
-Run the Groq-consuming acceptance check against an already running POC:
+During a Run, the Playground polls the persisted safe activity timeline rather
+than showing only a spinner. It reports secure preparation, Runtime start,
+protected-tool work, and finalization. If a live model provider returns `429`
+or the Runtime stops responding, the Run explains the recovery and offers
+`Try again` or `Stop run` as appropriate.
+
+Run the acceptance check against an already running POC:
 
 ```bash
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e
 ```
 
-The check creates a dedicated Agent, validates the initial flow denial and
-counter proof, then retries the denied call with a fresh capability in the same
-policy context.
+The check creates a dedicated Agent, validates the Support allow, Payment
+provenance denial and unchanged CRM counter, proves aggregate and fresh Support
+recovery, retries the denied call without repeating derivation, then revokes the
+mandate and proves a fresh context can run again. The default fixture path uses
+no model credential; the `container` profile consumes Groq tokens.
 
 If a bind mount is rejected, set `LOCAL_POC_DATA_ROOT` to a directory shared
 with the container VM. On Linux, the startup script automatically uses the host

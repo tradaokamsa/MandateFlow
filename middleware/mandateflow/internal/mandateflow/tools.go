@@ -366,7 +366,7 @@ func (s *Service) persistDenial(
 		return ToolResult{}, err
 	}
 	return ToolResult{
-		OK: false, Code: code, Message: reason, ReceiptID: receiptID,
+		OK: false, Code: code, Message: reason, ReceiptID: receiptID, RuleID: ruleID,
 	}, nil
 }
 

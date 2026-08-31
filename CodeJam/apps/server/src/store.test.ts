@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,5 +52,41 @@ describe("JsonStore", () => {
     expect(store.snapshot().messages.map((message) => message.content)).toEqual([
       "queue recovered",
     ]);
+  });
+
+  it("migrates legacy progress into typed session events", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-store-migration-test-"));
+    temporaryDirectories.push(root);
+    const databasePath = path.join(root, "db.json");
+    await writeFile(databasePath, JSON.stringify({
+      version: 3,
+      agents: [],
+      messages: [],
+      runs: [{
+        id: "run-legacy",
+        agentId: "agent-legacy",
+        status: "completed",
+        progress: [{
+          id: "event-legacy",
+          stage: "tool",
+          label: "Running a workspace command",
+          detail: "The Agent finished a command.",
+          createdAt: "2026-08-31T00:00:00.000Z",
+        }],
+      }],
+    }) + "\n");
+
+    const store = new JsonStore(databasePath);
+    await store.initialize();
+
+    expect(store.snapshot().version).toBe(4);
+    expect(store.snapshot().runs[0]?.progress[0]).toMatchObject({
+      runId: "run-legacy",
+      sequence: 1,
+      kind: "command",
+      state: "started",
+      title: "Running a workspace command",
+    });
+    expect(JSON.parse(await readFile(databasePath, "utf8")).version).toBe(4);
   });
 });

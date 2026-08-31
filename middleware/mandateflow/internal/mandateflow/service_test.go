@@ -109,7 +109,7 @@ func TestProvenanceAllowDenyAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if denied.OK || denied.Code != "FLOW_DENIED" || len(denied.SafeAlternatives) != 1 || denied.SafeAlternatives[0] != "payments.aggregate_failures" {
+	if denied.OK || denied.Code != "FLOW_DENIED" || denied.RuleID == nil || *denied.RuleID != "NO_PAYMENT_REIDENTIFICATION" || len(denied.SafeAlternatives) != 1 || denied.SafeAlternatives[0] != "payments.aggregate_failures" {
 		t.Fatalf("unexpected provenance denial: %+v", denied)
 	}
 	aggregate, err := service.ExecuteTool(context.Background(), principal, "payments.aggregate_failures", "")
@@ -130,7 +130,7 @@ func TestProvenanceAllowDenyAndRecovery(t *testing.T) {
 			denial = &evidence.Receipts[index]
 		}
 	}
-	if denial == nil || denial.StaticScopeDecision != "ALLOW" || denial.ProvenanceDecision != "DENY" || denial.Outcome != "NOT_INVOKED" || denial.DownstreamInvoked || denial.CounterBefore != denial.CounterAfter || len(denial.CausedByReceiptIDs) != 2 {
+	if denial == nil || denial.StaticScopeDecision != "ALLOW" || denial.ProvenanceDecision != "DENY" || denial.RuleID == nil || *denial.RuleID != "NO_PAYMENT_REIDENTIFICATION" || denial.Outcome != "NOT_INVOKED" || denial.DownstreamInvoked || denial.CounterBefore != denial.CounterAfter || len(denial.CausedByReceiptIDs) != 2 {
 		t.Fatalf("denial receipt does not prove pre-execution enforcement: %+v", denial)
 	}
 	forged, err := service.ExecuteTool(context.Background(), principal, "crm.resolve_customer", "ref1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -212,6 +212,50 @@ func TestForgedCrossContextAndScopeReferencesFailClosed(t *testing.T) {
 	scopeDenied, err := service.ExecuteTool(context.Background(), narrow, "payments.list_failures", "")
 	if err != nil || scopeDenied.Code != "SCOPE_DENIED" {
 		t.Fatalf("narrow retry grant widened: result=%+v error=%v", scopeDenied, err)
+	}
+}
+
+func TestFreshWorkflowRejectsOldReferencesAndAllowsFreshSupportLineage(t *testing.T) {
+	service := newTestService(t)
+	firstPrincipal, firstPrepared, _ := prepareActiveRun(t, service, "run-old", "agent-reset", PrepareNew, nil, nil, PlatformPermissions())
+	oldSupport, err := service.ExecuteTool(context.Background(), firstPrincipal, "support.list_tickets", "")
+	if err != nil || oldSupport.Reference == nil {
+		t.Fatalf("old Support lookup failed: result=%+v error=%v", oldSupport, err)
+	}
+	if _, err := service.Finish(context.Background(), "run-old", "COMPLETED"); err != nil {
+		t.Fatal(err)
+	}
+
+	secondPrincipal, secondPrepared, _ := prepareActiveRun(t, service, "run-fresh", "agent-reset", PrepareNew, nil, nil, PlatformPermissions())
+	if secondPrepared.PolicyContextID == firstPrepared.PolicyContextID || secondPrepared.MandateID == firstPrepared.MandateID {
+		t.Fatalf("fresh workflow reused old authority: old=%+v fresh=%+v", firstPrepared, secondPrepared)
+	}
+	oldReference, err := service.ExecuteTool(context.Background(), secondPrincipal, "cases.lookup_subject", oldSupport.Reference.Reference)
+	if err != nil || oldReference.Code != string(CodeInvalidReference) || oldReference.OK {
+		t.Fatalf("old workflow reference crossed the reset boundary: result=%+v error=%v", oldReference, err)
+	}
+	if _, err := service.ExecuteTool(context.Background(), firstPrincipal, "support.list_tickets", ""); !ErrorHasCode(err, CodeInvalidToken) {
+		t.Fatalf("old workflow capability remained usable after reset: %v", err)
+	}
+
+	freshSupport, err := service.ExecuteTool(context.Background(), secondPrincipal, "support.list_tickets", "")
+	if err != nil || freshSupport.Reference == nil {
+		t.Fatalf("fresh Support lookup failed: result=%+v error=%v", freshSupport, err)
+	}
+	freshCase, err := service.ExecuteTool(context.Background(), secondPrincipal, "cases.lookup_subject", freshSupport.Reference.Reference)
+	if err != nil || freshCase.Reference == nil {
+		t.Fatalf("fresh Case derivation failed: result=%+v error=%v", freshCase, err)
+	}
+	freshCRM, err := service.ExecuteTool(context.Background(), secondPrincipal, "crm.resolve_customer", freshCase.Reference.Reference)
+	if err != nil || !freshCRM.OK {
+		t.Fatalf("fresh Support lineage was not allowed: result=%+v error=%v", freshCRM, err)
+	}
+	evidence, err := service.Evidence(context.Background(), "run-fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.CRMCounter != 1 {
+		t.Fatalf("fresh workflow CRM counter = %d, want 1", evidence.CRMCounter)
 	}
 }
 

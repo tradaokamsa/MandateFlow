@@ -62,6 +62,22 @@ health belongs in the sidebar card and the configuration warning belongs at the
 top of the workspace. Provider setup copy should identify the single required
 credential and distinguish it from optional model defaults.
 
+When the deterministic fixture profile is active, a warm inline notice labels
+the workspace as proof-only and points coding work to the Codex-backed Runtime.
+
+Run activity belongs directly beneath the proof action and is repeated as a
+chronological session transcript in the conversation. The compact rail shows
+the current phase and recent safe summaries; the transcript expands typed
+planning, command, file, protected-tool, response, and terminal events with
+safe metadata. A transcript follows only while the user is near its bottom;
+otherwise the user gets an explicit jump action. This is the primary feedback
+pattern for long-running or model-backed work; a spinner alone is not enough.
+
+The Playground grows with mandate metadata and receipt details. The conversation
+transcript is the intentional bounded scroll region; evidence and disclosures
+must expand in normal document flow so opening a receipt never traps the user in
+a nested panel.
+
 ## Elevation & Shapes
 
 Use the existing paper panels, subtle shadows, 10px control radius, and 14px
@@ -79,6 +95,14 @@ color, and configuration failures explain the correction: set `GROQ_API_KEY`;
 ## Do's and Don'ts
 
 - **Do:** Keep provider status concise and visible beside the runtime identity.
+- **Do:** Show what the Agent is doing now, what happened recently, and when the
+  last Runtime event arrived.
+- **Do:** Make stalled work recoverable with a clear stop action and explain
+  what the user can do next.
+- **Do:** Keep validation and mutation failures beside the form or confirmation
+  action that can recover them.
+- **Do:** Give native disclosure and select controls a visible label and enough
+  geometry to read as interactive.
 - **Do:** Reuse existing spacing, typography, focus, and button patterns.
 - **Don't:** Display API keys, raw provider errors, or secret-bearing runtime output.
 - **Don't:** Turn a small setup change into a separate provider dashboard.

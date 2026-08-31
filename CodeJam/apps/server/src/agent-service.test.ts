@@ -20,6 +20,11 @@ import { WorkspaceManager } from "./workspace.js";
 
 class FakeRunner implements AgentRunner {
   async run(request: RunnerRequest): Promise<RunnerResult> {
+    request.onProgress?.({
+      stage: "tool",
+      label: "Running a workspace command",
+      detail: "The Agent is running a test command in the selected workspace.",
+    });
     return {
       output: "Completed: " + request.prompt,
       threadId: request.threadId ?? "fake-thread",
@@ -49,6 +54,7 @@ afterEach(async () => {
 async function makeService(
   runner: AgentRunner = new FakeRunner(),
   mandateFlow: MandateFlowControl | null = null,
+  environment: Record<string, string> = {},
 ): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
@@ -67,6 +73,7 @@ async function makeService(
           APP_AUTH_TOKEN: "a-secure-local-test-token",
         }
       : {}),
+    ...environment,
   });
   const service = new AgentService(
     config,
@@ -97,6 +104,23 @@ describe("Agent lifecycle", () => {
     const agent = await service.createAgent({ name: "Coder" });
     const { run } = await service.sendMessage(agent.id, "write hello world");
     await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(service.getRun(run.id).progress.map((event) => event.label)).toContain(
+      "Run complete",
+    );
+    expect(service.getRun(run.id).progress.map((event) => event.label)).toContain(
+      "Running a workspace command",
+    );
+    const activity = service.getRun(run.id).progress;
+    expect(activity.every((event) => event.runId === run.id)).toBe(true);
+    expect(activity.map((event) => event.sequence)).toEqual(
+      activity.map((event) => event.sequence).sort((left, right) => left - right),
+    );
+    expect(activity.some((event) => event.kind === "command" && event.state === "started")).toBe(true);
+    expect(activity.at(-1)).toMatchObject({
+      kind: "status",
+      state: "completed",
+      title: "Run complete",
+    });
     const messages = service.getMessages(agent.id);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
@@ -115,6 +139,29 @@ describe("Agent lifecycle", () => {
     });
     expect(JSON.stringify(system)).not.toContain("gsk-test-key");
     expect(system).not.toHaveProperty("arkConfigured");
+  });
+
+  it("runs the credential-free fixture provider without requiring Groq", async () => {
+    const service = await makeService(new FakeRunner(), null, {
+      RUNTIME_PROVIDER: "fixture",
+      GROQ_API_KEY: "",
+    });
+    const system = await service.systemInfo();
+    expect(system).toMatchObject({
+      groqConfigured: false,
+      runtimeProvider: "fixture",
+      runtime: "Deterministic MandateFlow fixture Runtime",
+    });
+
+    const agent = await service.createAgent({ name: "Fixture Agent" });
+    await expect(service.sendMessage(agent.id, "write a TypeScript CLI")).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "Run the MandateFlow verification workflow.",
+    );
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
   });
 
   it("atomically accepts only one concurrent run per Agent", async () => {
@@ -165,6 +212,7 @@ describe("Agent lifecycle", () => {
     const { run } = await service.sendMessage(agent.id, "first");
 
     await expect(service.startAgent(agent.id)).rejects.toMatchObject({ statusCode: 409 });
+    await expect(service.newDemoWorkflow(agent.id)).rejects.toMatchObject({ statusCode: 409 });
     await expect(service.sendMessage(agent.id, "second")).rejects.toMatchObject({
       statusCode: 409,
     });
@@ -186,6 +234,9 @@ class FakeMandateFlow implements MandateFlowControl {
   hasRetryableDenial = true;
   evidenceRunStatus = "COMPLETED";
   revoked = false;
+  private workflowNumber = 0;
+  private currentContextId = "ctx-1";
+  private currentMandateId = "mnd-1";
 
   async ready(): Promise<boolean> {
     this.events.push("ready");
@@ -198,12 +249,21 @@ class FakeMandateFlow implements MandateFlowControl {
   ): Promise<MandatePrepareResult> {
     this.events.push("prepare:" + request.mode);
     this.prepared.push({ runId, request });
+    if (request.mode === "NEW") {
+      this.workflowNumber += 1;
+      this.currentContextId = "ctx-" + this.workflowNumber;
+      this.currentMandateId = "mnd-" + this.workflowNumber;
+      this.revoked = false;
+    }
     return {
       runGrantId: "grant-" + this.prepared.length,
-      policyContextId: request.mode === "NEW" ? "ctx-1" : (request.policyContextId ?? "ctx-1"),
-      grantFingerprint: "grant:12345678",
-      capabilityFingerprint: "cap:12345678",
-      mandateId: "mnd-1",
+      policyContextId:
+        request.mode === "NEW"
+          ? this.currentContextId
+          : (request.policyContextId ?? this.currentContextId),
+      grantFingerprint: "grant:1234567" + this.prepared.length,
+      capabilityFingerprint: "cap:1234567" + this.prepared.length,
+      mandateId: this.currentMandateId,
       ownerPrincipal: request.ownerPrincipal,
       agentPrincipal: "agent:" + request.agentId,
       issuedAt: new Date().toISOString(),
@@ -269,11 +329,11 @@ class FakeMandateFlow implements MandateFlowControl {
 
   async summary(): Promise<MandateSummary> {
     return {
-      mandateId: "mnd-1",
+      mandateId: this.currentMandateId,
       status: this.revoked ? "REVOKED" : "ACTIVE",
       ownerPrincipal: "user-a",
       agentPrincipal: "agent:secure",
-      policyContextId: "ctx-1",
+      policyContextId: this.currentContextId,
       purposeId: "MIXED_OPERATIONS_BRIEF",
       policyId: "mixed-operations-flow",
       policyVersion: 1,
@@ -385,6 +445,34 @@ describe("MandateFlow lifecycle", () => {
     });
   });
 
+  it("fails closed when a proof response omits required gateway evidence", async () => {
+    const mandateFlow = new FakeMandateFlow();
+    const service = await makeService(new FakeRunner(), mandateFlow);
+    const agent = await service.createAgent({ name: "Incomplete Proof Agent" });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "Run the MandateFlow verification workflow.",
+    );
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("failed");
+    expect(service.getRun(run.id)).toMatchObject({
+      output: null,
+      error: expect.stringContaining("MandateFlow proof is incomplete"),
+    });
+    expect(service.getRun(run.id).progress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Proof evidence incomplete",
+          state: "failed",
+        }),
+      ]),
+    );
+    expect(service.getMessages(agent.id).map((message) => message.role)).toEqual([
+      "user",
+    ]);
+    expect(mandateFlow.events.some((event) => event.startsWith("finish:FAILED"))).toBe(true);
+  });
+
   it("rejects Retry when the completed Run has no provenance-denied CRM call", async () => {
     const mandateFlow = new FakeMandateFlow();
     const service = await makeService(new FakeRunner(), mandateFlow);
@@ -462,5 +550,69 @@ describe("MandateFlow lifecycle", () => {
     expect(events.indexOf("cancel")).toBeGreaterThan(events.indexOf("revoked"));
     await expect.poll(() => service.getRun(run.id).status).toBe("cancelled");
     expect(service.getAgent(agent.id).status).toBe("ready");
+  });
+
+  it("keeps a Runtime cancel rejection from breaking the stop flow", async () => {
+    let rejectRun!: (error: unknown) => void;
+    const runner: AgentRunner = {
+      run: async () =>
+        new Promise<RunnerResult>((_resolve, reject) => {
+          rejectRun = reject;
+        }),
+      cancel: async () => {
+        rejectRun(new RunCancelledError());
+        throw new Error("Runtime cancel endpoint failed");
+      },
+      isAvailable: async () => true,
+    };
+    const service = await makeService(runner);
+    const agent = await service.createAgent({ name: "Cancel Failure Agent" });
+    const { run } = await service.sendMessage(agent.id, "hold open");
+    await expect.poll(() => service.getRun(run.id).status).toBe("running");
+
+    await expect(service.stopAgent(agent.id)).resolves.toMatchObject({ status: "stopped" });
+    await expect.poll(() => service.getRun(run.id).status).toBe("cancelled");
+  });
+
+  it("resets a revoked workflow into fresh authority that can start again", async () => {
+    const requests: RunnerRequest[] = [];
+    const runner: AgentRunner = {
+      run: async (request) => {
+        requests.push(request);
+        return {
+          output: "secure result",
+          threadId: "thread-" + requests.length,
+          usage: null,
+          runtimeInstanceId: "runtime-" + requests.length,
+        };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    };
+    const mandateFlow = new FakeMandateFlow();
+    const service = await makeService(runner, mandateFlow);
+    const agent = await service.createAgent({ name: "Recovery Agent" });
+
+    const first = await service.sendMessage(agent.id, "run the protected proof");
+    await expect.poll(() => service.getRun(first.run.id).status).toBe("completed");
+    const firstAuthority = service.getRun(first.run.id);
+    expect(firstAuthority.policyContextId).toBe("ctx-1");
+
+    const revoked = await service.revokeMandate("mnd-1");
+    expect(revoked.mandate.status).toBe("REVOKED");
+
+    const reset = await service.newDemoWorkflow(agent.id);
+    expect(reset.activePolicyContextId).toBeNull();
+    expect(reset.codexThreadId).toBeNull();
+
+    const recovered = await service.sendMessage(agent.id, "run the support recovery flow");
+    await expect.poll(() => service.getRun(recovered.run.id).status).toBe("completed");
+    const recoveredAuthority = service.getRun(recovered.run.id);
+    expect(mandateFlow.prepared[1]?.request.mode).toBe("NEW");
+    expect(recoveredAuthority.policyContextId).toBe("ctx-2");
+    expect(recoveredAuthority.mandateId).toBe("mnd-2");
+    expect(recoveredAuthority.runGrantId).not.toBe(firstAuthority.runGrantId);
+    expect(recoveredAuthority.capabilityFingerprint).not.toBe(firstAuthority.capabilityFingerprint);
+    expect(requests).toHaveLength(2);
   });
 });

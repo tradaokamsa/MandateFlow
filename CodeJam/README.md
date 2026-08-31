@@ -46,7 +46,8 @@ Volcengine ECS.
 - Node.js 22+
 - npm 10+
 - Docker, Colima, or Podman
-- A Groq API key; the model defaults to `openai/gpt-oss-120b`
+- A Groq API key for the live Agent demonstration (`container` Runtime profile)
+- No Groq key is needed for the deterministic middleware-only fallback
 
 Codex CLI is included in the Runtime image and is not required on the host.
 
@@ -75,17 +76,40 @@ cd volc-agent-launchpad
 
 Skip this step when already working from the repository root.
 
-### 3. Start the POC
+### 3. Start the live Agent demonstration
 
 ```bash
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
-GROQ_API_KEY=your-groq-api-key \
+export RUNTIME_PROVIDER=container
+export GROQ_API_KEY='your-real-groq-api-key'
+export GROQ_MODEL='openai/gpt-oss-120b'
 npm run poc
 ```
 
-The first run installs Node.js dependencies, runs the Go test target, and builds
-the Runtime and MandateFlow images. The script automatically selects Docker,
-Colima, or Podman. Enter `APP_AUTH_TOKEN` in the browser unlock screen.
+The first run installs Node.js dependencies, runs the Go test target, builds the
+MandateFlow image and the disposable Codex Runtime image, then starts the live
+Codex Agent through Groq. The script automatically selects Docker, Colima, or
+Podman. Enter `APP_AUTH_TOKEN` in the browser unlock screen. The startup log
+must say `Runtime provider: container`; if it says `fixture`, the Groq key was
+not loaded.
+
+If this checkout stores the raw Groq key in `../api_key.txt` at the repository
+root, load it without printing it:
+
+```bash
+export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
+```
+
+For a middleware-only run without a model credential, use the deterministic
+fallback explicitly:
+
+```bash
+export RUNTIME_PROVIDER=fixture
+npm run poc
+```
+
+Fixture mode still crosses Fastify → Streamable HTTP MCP → Go → SQLite → API/UI,
+but it is proof-only and does not demonstrate a general coding Agent.
 
 ### 4. Open the browser
 
@@ -101,15 +125,28 @@ In the Web UI:
 1. Select **Create Agent**.
 2. Enter a name, description, and workspace instructions.
 3. Select **Create Agent** again.
-4. Select the first starter prompt, which runs the deterministic proof:
+4. Select **Start** for the new Agent.
+5. In live `container` mode, select the coding starter prompt:
+
+   ```text
+   Create a small TypeScript CLI that prints a weather summary from sample JSON.
+   ```
+
+   Watch **Runtime activity** while the real Agent is queued, authorized,
+   started, using tools, and finalized. Inspect the assistant response and the
+   workspace result.
+6. Select **New secure workflow**.
+7. In the proof console, select **Run MandateFlow proof**, which runs the
+   deterministic security workflow below:
 
    ```text
    Run the MandateFlow verification workflow. First, list the open Support ticket,
    transform its subject reference with cases.lookup_subject, and resolve that Case
    reference through CRM. Next, list Payment failures, transform one Payment reference
    with the same Case tool, and attempt the same CRM resolution. If policy denies it,
-   use payments.aggregate_failures and finish the brief. Report policy outcomes, not
-   protected identifiers.
+   use payments.aggregate_failures, then fetch a fresh Support ticket, transform
+   it, and resolve it through CRM. Report policy outcomes, not protected
+   identifiers.
    ```
 
 The create form includes a bounded demo owner selector. `user-a` and `user-b`
@@ -118,18 +155,66 @@ identities. The owner is stored with the Agent and root mandate and cannot be
 changed through the edit form. The Go sidecar selects and checks the matching
 typed fixture before a protected operation runs.
 
-The decision journal should show Support → Case → CRM as `ALLOW`, Payment →
-Case → CRM as `FLOW_DENIED`, the denied CRM counter unchanged, and aggregate
-recovery succeeding. Use **Retry denied call** to prove that a new Runtime and
-capability cannot erase the Payment lineage.
+The proof console and decision journal should show Support → Case → CRM as
+`ALLOW`, Payment → Case → CRM as `FLOW_DENIED` with rule
+`NO_PAYMENT_REIDENTIFICATION`, the denied CRM counter unchanged, aggregate
+recovery, and a fresh Support recovery. The control plane validates those
+receipts before accepting a live proof as completed; a model summary cannot
+claim a step that the Go gateway did not record. Use **Retry denied call** to
+prove that a new Runtime and capability cannot erase the Payment lineage.
+Expand a receipt to inspect the redacted decision and follow its causal parent
+links.
 
 The selected Playground also shows a server-derived Mandate Summary. **Revoke
 mandate** first commits the root mandate's `REVOKED` state in the Go sidecar,
 then cancels the active Runtime. Revocation is idempotent; the evidence
 timeline remains visible, while Send and Retry stay disabled until **New secure
-workflow** explicitly creates a fresh mandate.
+workflow** explicitly creates a fresh mandate. Starting that workflow clears the
+old thread association and creates a fresh policy context; old references fail
+under the new capability.
 
-### 5. Stop and resume
+During a Run, the **Runtime activity** rail is the progress surface. It reports
+queued, authorization, Runtime/tool work, finalization, terminal, and failure
+states with timestamps. A stale active Run offers **Stop run** instead of
+leaving the user with an indefinite spinner. The live `container` profile is
+required for Codex-backed coding. The `fixture` profile is intentionally
+proof-only and exposes only **Run MandateFlow proof**.
+
+Form and recovery behavior is deliberately visible: access-token errors stay
+next to the field, Create/Edit errors keep the form open, native owner selection
+remains a normal browser select, and receipt **Details** expands in the page
+flow. Only the conversation transcript owns a bounded scroll region. Revoke and
+Delete confirmations remain open while a mutation is pending and show a
+recoverable error in the same dialog when a request fails.
+
+### 5. User flows for the demo
+
+Use the completed Run's proof console and decision journal as the demo surface.
+Walk through the story in this order:
+
+1. **Start with a real Agent:** show the coding prompt, the Runtime activity
+   rail, the assistant response, and the workspace change.
+2. **Establish trust:** show **MandateFlow ready**, **New secure workflow**, and
+   the server-derived Mandate Summary.
+3. **Trusted Support path:** `Support → Case → CRM` is `ALLOW`; the CRM counter
+   moves `0 → 1` and the receipt is `COMPLETED`.
+4. **Unsafe Payment path:** the same public Case type and CRM method are
+   `FLOW_DENIED` by `NO_PAYMENT_REIDENTIFICATION` at `PRE_EXECUTION`. The
+   outcome is `NOT_INVOKED` and the counter stays `1 → 1`.
+5. **Safe recovery:** `payments.aggregate_failures` succeeds, followed by a
+   fresh Support path that moves the counter `1 → 2`.
+6. **Retry without inherited trust:** **Retry denied call** creates fresh Run
+   authority but preserves policy context and Payment lineage; it is denied
+   again without repeating derivation.
+7. **Revoke and reset:** **Revoke mandate** locks Send/Retry, and **New secure
+   workflow** creates a fresh context that cannot accept old references.
+
+Expand at least one allowed receipt and the denied receipt so the audience can
+see the redacted rule, decision phase, outcome, counter evidence, and causal
+parent links. The one-line takeaway is: **same tool, same public type, different
+trusted provenance — different authorization outcome.**
+
+### 6. Stop and resume
 
 Press `Ctrl+C` in the startup terminal. The script removes temporary Runtime
 containers, the Go sidecar, and its private network, while keeping Agent
@@ -141,6 +226,22 @@ workspaces, conversations, and the MandateFlow SQLite journal.
 
 Run the same `npm run poc` command to continue later.
 
+If port `3000` is already in use, choose another loopback port and open that
+address in the browser:
+
+```bash
+PORT=3100 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run poc
+open http://127.0.0.1:3100
+```
+
+For a terminal-only check against that running instance:
+
+```bash
+MANDATEFLOW_E2E_BASE_URL=http://127.0.0.1:3100 \
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
+npm run check:mandateflow:e2e
+```
+
 ### Select a specific container engine
 
 Force Podman when multiple engines are installed:
@@ -148,6 +249,7 @@ Force Podman when multiple engines are installed:
 ```bash
 CONTAINER_ENGINE=podman \
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
+RUNTIME_PROVIDER=container \
 GROQ_API_KEY=your-groq-api-key \
 npm run poc
 ```
@@ -241,14 +343,14 @@ cp deploy/volcengine/terraform.tfvars.example \
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GROQ_API_KEY` | Required | Groq API key. |
+| `GROQ_API_KEY` | Optional | Required only for `RUNTIME_PROVIDER=container`. |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Responses-capable Groq model. |
 | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Groq OpenAI-compatible API URL. |
 | `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
 | `MANDATEFLOW_ENABLED` | `false` | Enables fail-closed Run lifecycle integration. `npm run poc` sets it to `true`. |
 | `MANDATEFLOW_CONTROL_URL` | `http://127.0.0.1:3002` | Host-only Go lifecycle/evidence endpoint. |
 | `MANDATEFLOW_RUNTIME_MCP_URL` | `http://mandateflow-gateway:3001/mcp` | MCP URL visible inside the private Runtime network. |
-| `RUNTIME_PROVIDER` | `local-process` | `container` for disposable local Runtime containers. |
+| `RUNTIME_PROVIDER` | `local-process` | `container` for live disposable Runtime containers or `fixture` for the credential-free proof. `npm run poc` selects `fixture` when no usable Groq key is present. |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode. |
 | `CODEX_TIMEOUT_MS` | `600000` | Maximum duration of one turn. |
 | `LOCAL_POC_DATA_ROOT` | Platform-specific | Local metadata, workspace, and session directory. |
@@ -265,7 +367,7 @@ flowchart LR
     Go --> SQLite["Go-owned SQLite"]
     API --> Container["Disposable Codex Runtime"]
     Container -->|per-Run bearer + MCP| Go
-    Container --> Groq["Groq Responses API"]
+    Container --> Groq["Groq Responses API (optional live profile)"]
     Go --> Fixtures["Protected Support / Payments / Cases / CRM fixtures"]
 ```
 
@@ -282,14 +384,15 @@ boundaries.
 npm run test:server
 npm run check:fast
 npm run check
-APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e  # running POC; consumes Groq tokens
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e  # running fixture POC by default
 terraform fmt -check -recursive deploy/volcengine
 docker compose config
 ```
 
 Use `npm run test:server:watch` while iterating on the server. `check:fast`
-runs TypeScript typechecks, server tests, Go formatting, `go vet`, and race
-tests without production bundle builds, Docker image builds, or Groq requests.
+runs TypeScript typechecks, server and web tests, Go formatting, `go vet`, and
+race tests without production bundle builds, Docker image builds, or Groq
+requests.
 It requires a local Go 1.23+ toolchain. Keep `npm run check` as the complete
 local gate before opening a pull request.
 
