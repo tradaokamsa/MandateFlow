@@ -1,5 +1,6 @@
-import type { AgentRun, MandateEvidence, RunProgressEvent } from "./types";
+import type { AgentRun, MandateEvidence } from "./types";
 import { deriveProofSnapshot } from "./proof";
+import { RuntimeSessionTimeline } from "./RuntimeSessionTimeline";
 
 interface ProofPanelProps {
   evidence: MandateEvidence | null;
@@ -12,21 +13,6 @@ interface ProofPanelProps {
   onRunProof: () => void;
   onRetry: () => void;
   onStop: () => void;
-}
-
-function formatProgressTime(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
-}
-
-function progressIcon(event: RunProgressEvent): string {
-  if (event.stage === "complete") return "✓";
-  if (event.stage === "error") return "!";
-  if (event.stage === "cancelled") return "–";
-  return event.stage === "tool" ? "↗" : "·";
 }
 
 export function ProofPanel({
@@ -45,7 +31,6 @@ export function ProofPanel({
   const isRunning = activeRun != null && ["queued", "running"].includes(activeRun.status);
   const progress = activeRun?.progress ?? [];
   const currentProgress = progress.at(-1);
-  const visibleProgress = progress.slice(-7);
   const progressAge = currentProgress
     ? Date.now() - new Date(currentProgress.createdAt).getTime()
     : 0;
@@ -101,7 +86,7 @@ export function ProofPanel({
             <div>
               <span className="eyebrow">Runtime activity</span>
               <strong id="run-activity-title">
-                {currentProgress?.label ?? (isRunning ? "Starting the Agent Runtime" : "Run activity")}
+                {currentProgress?.title ?? (isRunning ? "Starting the Agent Runtime" : "Run activity")}
               </strong>
             </div>
             <div className="run-activity-actions">
@@ -113,18 +98,12 @@ export function ProofPanel({
               )}
             </div>
           </div>
-          <ol className="run-progress-list" aria-label="Recent Agent Runtime activity">
-            {visibleProgress.map((event) => (
-              <li className={"run-progress-item run-progress-" + event.stage} key={event.id}>
-                <span className="run-progress-icon" aria-hidden="true">{progressIcon(event)}</span>
-                <span className="run-progress-copy">
-                  <strong>{event.label}</strong>
-                  <span>{event.detail}</span>
-                </span>
-                <time dateTime={event.createdAt}>{formatProgressTime(event.createdAt)}</time>
-              </li>
-            ))}
-          </ol>
+          <RuntimeSessionTimeline
+            run={activeRun}
+            compact
+            maxEvents={7}
+            ariaLabel="Recent Agent Runtime activity"
+          />
           {runtimeStalled && (
             <div className="run-stall-notice" role="alert">
               <span>

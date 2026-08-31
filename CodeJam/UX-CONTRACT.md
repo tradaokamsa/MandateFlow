@@ -41,7 +41,7 @@
 | Destructive confirmation | App-owned modal dialog | `apps/web/src/App.tsx` | revoke / delete | keyboard + failure-path tests |
 | Status feedback | Inline `role=status` and `role=alert` regions | `apps/web/src/App.tsx` | success / warning / error | DOM-level test |
 | Proof console | `ProofPanel` plus pure receipt derivation | `apps/web/src/ProofPanel.tsx`, `proof.ts` | pending / verified | receipt-backed state tests |
-| Run activity | `ProofPanel` activity rail backed by `AgentRun.progress` | `apps/server/src/types.ts`, runner event parsing | queued / active / terminal | progress persistence + stale-state recovery |
+| Run activity | `RuntimeSessionTimeline` plus the `ProofPanel` summary rail backed by `AgentRun.progress` | `apps/server/src/types.ts`, `apps/server/src/runtime-session.ts`, runner event parsing | queued / active / terminal | typed event persistence + stale-state recovery |
 | Receipt detail | Native `details` disclosure | `apps/web/src/ReceiptCard.tsx` | compact / expanded / missing parent | redaction + causal-link tests |
 
 ## Component behavior
@@ -60,7 +60,7 @@
 | Create Agent | Create Agent form | Disable submit | Selected Agent Playground | Agent appears in sidebar | Preserve form and show inline alert | Modal remains open on failure | `apps/web/src/App.tsx` |
 | Edit Agent | Settings form | Disable submit | Same Playground | Updated configuration | Preserve form and show inline alert | Keep settings open on failure | `apps/web/src/App.tsx` |
 | Revoke mandate | Mandate Summary action | App-owned confirmation, then disable action | Same Playground with evidence retained | Inline revoked/cancelled status | Keep summary and explain failure | Return focus to summary action | GitHub issue #8 |
-| Run activity | Send / proof / retry action | Timestamped queued, authorization, Runtime, tool, and finalization events | Same Playground with result or recovery state | Current phase, recent activity, and terminal status | Explain stale Runtime and offer Stop run | Keep activity region in view | `apps/server/src/types.ts` |
+| Run activity | Send / proof / retry action | Timestamped queued, planning, command, file, protected-tool, response, finalization, and terminal events | Same Playground with result or recovery state | Chronological safe session transcript plus compact current phase | Explain stale Runtime and offer Stop run | Follow only a transcript pinned near its bottom | `apps/server/src/types.ts` |
 | New secure workflow | Explicit header action | Disable while busy or an active Run exists | Same Playground with cleared thread association | Fresh-workflow status; proof returns to pending | Keep prior evidence until action succeeds | Focus remains in header | GitHub issue #8 |
 | Delete Agent | Delete action | Confirmation remains open while deleting | Agent list | Agent removed and workspace archived | Keep confirmation open and show error | Focus moves to selected list item | `apps/web/src/App.tsx` |
 
@@ -89,7 +89,10 @@
 - Duplicate revoke submissions are prevented in the UI and the sidecar operation is idempotent.
 - Sidecar persistence precedes Runtime cancellation; an unavailable sidecar fails closed.
 - Polling refreshes Agent state, messages, evidence, mandate summary, and the
-  persisted Run activity timeline while a Run is active. If no Runtime event is
+  persisted Run activity timeline while a Run is active. The transcript owns
+  its scroll position: polling may follow new events only while the user is
+  within 96px of its bottom. When the user reads older content, a keyboard-
+  reachable “Jump to latest” action appears instead. If no Runtime event is
   received for 12 seconds, the UI names the possible stall and offers Stop run.
 
 ## Validation

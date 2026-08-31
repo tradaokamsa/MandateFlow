@@ -8,6 +8,7 @@ import {
   type MandateFlowControl,
 } from "./mandateflow-client.js";
 import { JsonStore } from "./store.js";
+import { createRuntimeSessionEvent, sanitizeSafeMetadata } from "./runtime-session.js";
 import { redactRuntimeText } from "./trace.js";
 import type {
   Agent,
@@ -41,11 +42,21 @@ const MAX_RUN_PROGRESS_EVENTS = 80;
 const CANCELLATION_WAIT_MS = 8_000;
 
 function addRunProgress(run: AgentRun, event: RunnerProgressEvent): void {
-  run.progress.push({
-    id: randomUUID(),
-    ...event,
-    createdAt: now(),
-  });
+  const previousSequence = run.progress.reduce(
+    (maximum, current) => Math.max(maximum, current.sequence),
+    0,
+  );
+  const safeMetadata = sanitizeSafeMetadata(event.safeMetadata);
+  const normalizedEvent = createRuntimeSessionEvent(
+    run.id,
+    previousSequence + 1,
+    randomUUID(),
+    now(),
+    safeMetadata
+      ? { ...event, safeMetadata }
+      : event,
+  );
+  run.progress.push(normalizedEvent);
   if (run.progress.length > MAX_RUN_PROGRESS_EVENTS) {
     run.progress.splice(0, run.progress.length - MAX_RUN_PROGRESS_EVENTS);
   }
@@ -473,6 +484,11 @@ export class AgentService {
       progress: [
         {
           id: randomUUID(),
+          runId: runId,
+          sequence: 1,
+          kind: "status",
+          state: "started",
+          title: "Run queued",
           stage: "queued",
           label: "Run queued",
           detail: "Waiting for the secure Agent Runtime to start.",
@@ -542,6 +558,9 @@ export class AgentService {
       await this.queueRunProgress(run.id, {
         stage: "phase",
         label: "Preparing secure Run",
+        kind: "status",
+        state: "started",
+        title: "Preparing secure Run",
         detail: "MandateFlow is checking the grant and preparing the Agent workspace.",
       });
       const codexHomePath = await ensureAgentCodexHome(this.config.codexHome, agentAtStart.id);
@@ -552,6 +571,9 @@ export class AgentService {
         await this.queueRunProgress(run.id, {
           stage: "phase",
           label: "Authorizing protected tools",
+          kind: "mcp",
+          state: "started",
+          title: "Authorizing protected tools",
           detail: "The control plane is issuing a Run-scoped capability before the Runtime starts.",
         });
         capability = createRunCapability();
@@ -618,6 +640,9 @@ export class AgentService {
       await this.queueRunProgress(run.id, {
         stage: "phase",
         label: "Runtime started",
+        kind: "status",
+        state: "started",
+        title: "Runtime started",
         detail: "The Agent Runtime is ready to work in the selected workspace.",
       });
 
@@ -639,6 +664,9 @@ export class AgentService {
         await this.queueRunProgress(run.id, {
           stage: "phase",
           label: "Finalizing secure Run",
+          kind: "status",
+          state: "started",
+          title: "Finalizing secure Run",
           detail: "The control plane is closing the capability and saving the decision evidence.",
         });
         await this.store.mutate((database) => {
@@ -672,6 +700,9 @@ export class AgentService {
         addRunProgress(storedRun, {
           stage: "complete",
           label: "Run complete",
+          kind: "status",
+          state: "completed",
+          title: "Run complete",
           detail: "The Agent returned a result and the secure Run was closed.",
         });
         database.messages.push({
@@ -718,6 +749,9 @@ export class AgentService {
           addRunProgress(storedRun, {
             stage: cancelled ? "cancelled" : "error",
             label: cancelled ? "Run cancelled" : "Run failed",
+            kind: cancelled ? "status" : "error",
+            state: cancelled ? "cancelled" : "failed",
+            title: cancelled ? "Run cancelled" : "Run failed",
             detail: cancelled
               ? "The Runtime stopped before completing this request."
               : "The Runtime could not complete this request. Review the error above and try again.",

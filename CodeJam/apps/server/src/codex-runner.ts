@@ -9,6 +9,10 @@ import { promisify } from "node:util";
 import type { AppConfig } from "./config.js";
 import { RunCancelledError } from "./errors.js";
 import { GroqResponsesProxy } from "./groq-responses.js";
+import {
+  createRunnerProgressEvent,
+  sanitizeSafeMetadata,
+} from "./runtime-session.js";
 import { redactRuntimeText } from "./trace.js";
 import type {
   AgentRunner,
@@ -25,6 +29,7 @@ export interface ParsedEvents {
   threadId: string | null;
   usage: RunUsage | null;
   errors: string[];
+  assistantStreaming?: boolean;
 }
 
 export function buildCodexArgs(
@@ -71,32 +76,57 @@ export function parseCodexEventLine(
   if (event.type === "thread.started" && typeof event.thread_id === "string") {
     parsed.threadId = event.thread_id;
     onProgress?.({
-      stage: "phase",
-      label: "Codex session connected",
-      detail: "The Agent Runtime opened a secure coding session.",
+      ...createRunnerProgressEvent({
+        stage: "phase",
+        kind: "status",
+        state: "completed",
+        title: "Codex session connected",
+        detail: "The Agent Runtime opened a secure coding session.",
+      }),
     });
   }
 
   if (event.type === "turn.started") {
     onProgress?.({
-      stage: "phase",
-      label: "Agent is planning the next step",
-      detail: "The Agent is deciding whether to inspect files, edit code, run a command, or use a protected tool.",
+      ...createRunnerProgressEvent({
+        stage: "phase",
+        kind: "plan",
+        state: "started",
+        title: "Agent is planning the next step",
+        detail: "The Agent is deciding whether to inspect files, edit code, run a command, or use a protected tool.",
+      }),
     });
   }
 
   if (event.type === "item.started" && event.item && typeof event.item === "object") {
-    const itemType = (event.item as Record<string, unknown>).type;
-    const progress = progressForCodexItem(itemType, false);
+    const item = event.item as Record<string, unknown>;
+    const progress = progressForCodexItem(item, false);
     if (progress) onProgress?.(progress);
+    if (item.type === "agent_message") parsed.assistantStreaming = true;
   }
 
   if (event.type === "item.completed" && event.item && typeof event.item === "object") {
     const item = event.item as Record<string, unknown>;
-    const progress = progressForCodexItem(item.type, true);
+    const progress = progressForCodexItem(item, true);
     if (progress) onProgress?.(progress);
     if (item.type === "agent_message" && typeof item.text === "string") {
       parsed.messages.push(item.text);
+      parsed.assistantStreaming = false;
+    }
+  }
+
+  if (event.type === "item.delta") {
+    if (!parsed.assistantStreaming) {
+      parsed.assistantStreaming = true;
+      onProgress?.({
+        ...createRunnerProgressEvent({
+          stage: "phase",
+          kind: "assistant",
+          state: "streaming",
+          title: "Agent response streaming",
+          detail: "The Agent is composing a response from the completed workspace work.",
+        }),
+      });
     }
   }
 
@@ -116,9 +146,13 @@ export function parseCodexEventLine(
       };
     }
     onProgress?.({
-      stage: "phase",
-      label: "Agent turn complete",
-      detail: "The Runtime finished this turn and is returning the result.",
+      ...createRunnerProgressEvent({
+        stage: "phase",
+        kind: "status",
+        state: "completed",
+        title: "Agent turn complete",
+        detail: "The Runtime finished this turn and is returning the result.",
+      }),
     });
   }
 
@@ -131,55 +165,113 @@ export function parseCodexEventLine(
           : "Codex reported an unknown error";
     parsed.errors.push(message);
     onProgress?.({
-      stage: "error",
-      label: "Codex reported an error",
-      detail: "The Agent Runtime reported a problem before the Run could finish.",
+      ...createRunnerProgressEvent({
+        stage: "error",
+        kind: "error",
+        state: "failed",
+        title: "Codex reported an error",
+        detail: "The Agent Runtime reported a problem before the Run could finish.",
+      }),
     });
   }
 }
 
 function progressForCodexItem(
-  itemType: unknown,
+  item: Record<string, unknown>,
   completed: boolean,
 ): RunnerProgressEvent | null {
+  const itemType = item.type;
   if (typeof itemType !== "string") return null;
-  const suffix = completed ? " complete" : "";
+  const failed = completed && (item.status === "failed" || item.status === "error");
+  const suffix = failed ? " failed" : completed ? " complete" : "";
+  const state = failed ? "failed" : completed ? "completed" : "started";
+  const safeMetadata = sanitizeSafeMetadata(safeCodexMetadata(item));
   switch (itemType) {
     case "command_execution":
-      return {
-        stage: "tool",
-        label: "Running a workspace command" + suffix,
+      return createRunnerProgressEvent({
+        stage: failed ? "error" : "tool",
+        kind: "command",
+        state,
+        title: "Running a workspace command" + suffix,
         detail: completed
-          ? "The Agent finished a command in the selected workspace."
+          ? failed
+            ? "The Agent command failed in the selected workspace."
+            : "The Agent finished a command in the selected workspace."
           : "The Agent is running a command in the selected workspace.",
-      };
+        ...(safeMetadata ? { safeMetadata } : {}),
+      });
     case "file_change":
     case "file_edit":
-      return {
-        stage: "tool",
-        label: "Updating workspace files" + suffix,
+      return createRunnerProgressEvent({
+        stage: failed ? "error" : "tool",
+        kind: "file_change",
+        state,
+        title: "Updating workspace files" + suffix,
         detail: completed
-          ? "The Agent applied a code change in the selected workspace."
+          ? failed
+            ? "The Agent could not apply a code change in the selected workspace."
+            : "The Agent applied a code change in the selected workspace."
           : "The Agent is preparing a code change in the selected workspace.",
-      };
+        ...(safeMetadata ? { safeMetadata } : {}),
+      });
     case "mcp_tool_call":
     case "tool_call":
-      return {
-        stage: "tool",
-        label: "Checking a protected tool call" + suffix,
+      return createRunnerProgressEvent({
+        stage: failed ? "error" : "tool",
+        kind: "mcp",
+        state,
+        title: "Checking a protected tool call" + suffix,
         detail: completed
-          ? "MandateFlow recorded the protected-tool decision."
+          ? failed
+            ? "MandateFlow could not complete the protected-tool decision."
+            : "MandateFlow recorded the protected-tool decision."
           : "MandateFlow is checking the call before the protected service runs.",
-      };
+        ...(safeMetadata ? { safeMetadata } : {}),
+      });
     case "agent_message":
-      return {
+      return createRunnerProgressEvent({
         stage: "phase",
-        label: "Preparing the Agent response" + suffix,
+        kind: "assistant",
+        state: completed ? "completed" : "streaming",
+        title: "Preparing the Agent response" + suffix,
         detail: "The Agent is assembling a safe summary of the work.",
-      };
+      });
     default:
       return null;
   }
+}
+
+function safeCodexMetadata(item: Record<string, unknown>) {
+  const paths = extractPaths(item);
+  const durationMs = typeof item.duration_ms === "number"
+    ? item.duration_ms
+    : typeof item.durationMs === "number"
+      ? item.durationMs
+      : undefined;
+  const tool = typeof item.tool === "string"
+    ? item.tool
+    : typeof item.name === "string"
+      ? item.name
+      : undefined;
+  if (!paths.length && durationMs === undefined && !tool) return undefined;
+  return {
+    ...(paths.length ? { paths } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(tool ? { tool } : {}),
+  };
+}
+
+function extractPaths(item: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  if (typeof item.path === "string") paths.push(item.path);
+  if (Array.isArray(item.changes)) {
+    for (const change of item.changes) {
+      if (change && typeof change === "object" && typeof (change as Record<string, unknown>).path === "string") {
+        paths.push((change as Record<string, unknown>).path as string);
+      }
+    }
+  }
+  return paths;
 }
 
 export class CodexRunner implements AgentRunner {

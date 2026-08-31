@@ -1,5 +1,6 @@
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import type { AppConfig } from "./config.js";
+import { createRunnerProgressEvent } from "./runtime-session.js";
 import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 
 const FIXTURE_STATE_FILENAME = "mandateflow-fixture-state.json";
@@ -52,14 +53,19 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
 
     if (request.prompt.toLowerCase().includes("retry only the previously denied")) {
       request.onProgress?.({
-        stage: "tool",
-        label: "Replaying the denied CRM call",
-        detail: "The retry is using the prior Payment-derived Case reference without re-deriving it.",
+        ...createRunnerProgressEvent({
+          stage: "tool",
+          kind: "mcp",
+          state: "started",
+          title: "Replaying the denied CRM call",
+          detail: "The retry is using the prior Payment-derived Case reference without re-deriving it.",
+          safeMetadata: { tool: "crm.resolve_customer" },
+        }),
       });
       await this.initializeSession(request.mandateFlowCapability);
       const paymentCaseReference = await this.loadPaymentCaseReference(request);
       const retryDenial = await this.callTool(
-        request.mandateFlowCapability,
+        request,
         "crm.resolve_customer",
         { reference: paymentCaseReference },
       );
@@ -82,50 +88,62 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
     }
 
     request.onProgress?.({
-      stage: "phase",
-      label: "Discovering protected tools",
-      detail: "The secure Runtime is confirming the tools granted by this mandate.",
+      ...createRunnerProgressEvent({
+        stage: "phase",
+        kind: "plan",
+        state: "started",
+        title: "Discovering protected tools",
+        detail: "The secure Runtime is confirming the tools granted by this mandate.",
+      }),
     });
     await this.initializeSession(request.mandateFlowCapability);
     await this.assertFullGrantDiscovery(request.mandateFlowCapability);
 
     request.onProgress?.({
-      stage: "tool",
-      label: "Checking the trusted Support path",
-      detail: "Support → Case → CRM should be allowed by the provenance policy.",
+      ...createRunnerProgressEvent({
+        stage: "tool",
+        kind: "mcp",
+        state: "started",
+        title: "Checking the trusted Support path",
+        detail: "Support → Case → CRM should be allowed by the provenance policy.",
+      }),
     });
     const support = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "support.list_tickets",
       {},
     );
     const supportReference = requireReference(support, "Support lookup");
     const supportCase = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "cases.lookup_subject",
       { reference: supportReference },
     );
     const supportCaseReference = requireReference(supportCase, "Support Case transform");
     const supportCRM = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "crm.resolve_customer",
       { reference: supportCaseReference },
     );
     requireSuccess(supportCRM, "Support CRM recovery");
 
     request.onProgress?.({
-      stage: "tool",
-      label: "Checking the Payment path",
-      detail: "Payment → Case → CRM should be blocked before CRM is invoked.",
+      ...createRunnerProgressEvent({
+        stage: "tool",
+        kind: "mcp",
+        state: "started",
+        title: "Checking the Payment path",
+        detail: "Payment → Case → CRM should be blocked before CRM is invoked.",
+      }),
     });
     const payment = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "payments.list_failures",
       {},
     );
     const paymentReference = requireReference(payment, "Payment lookup");
     const paymentCase = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "cases.lookup_subject",
       { reference: paymentReference },
     );
@@ -133,7 +151,7 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
     await this.savePaymentCaseReference(request, paymentCaseReference);
 
     const paymentDenial = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "crm.resolve_customer",
       { reference: paymentCaseReference },
     );
@@ -146,30 +164,39 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
     }
 
     request.onProgress?.({
-      stage: "tool",
-      label: "Recording a safe recovery",
-      detail: "The protected workflow is using the offered aggregate operation after the denial.",
+      ...createRunnerProgressEvent({
+        stage: "tool",
+        kind: "mcp",
+        state: "started",
+        title: "Recording a safe recovery",
+        detail: "The protected workflow is using the offered aggregate operation after the denial.",
+        safeMetadata: { tool: "payments.aggregate_failures" },
+      }),
     });
     const aggregate = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "payments.aggregate_failures",
       {},
     );
     requireSuccess(aggregate, "Payment aggregate recovery");
 
     request.onProgress?.({
-      stage: "tool",
-      label: "Verifying fresh Support recovery",
-      detail: "A new Support-derived Case should be allowed in the same policy context.",
+      ...createRunnerProgressEvent({
+        stage: "tool",
+        kind: "mcp",
+        state: "started",
+        title: "Verifying fresh Support recovery",
+        detail: "A new Support-derived Case should be allowed in the same policy context.",
+      }),
     });
     const freshSupport = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "support.list_tickets",
       {},
     );
     const freshSupportReference = requireReference(freshSupport, "Fresh Support lookup");
     const freshSupportCase = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "cases.lookup_subject",
       { reference: freshSupportReference },
     );
@@ -178,7 +205,7 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
       "Fresh Support Case transform",
     );
     const freshSupportCRM = await this.callTool(
-      request.mandateFlowCapability,
+      request,
       "crm.resolve_customer",
       { reference: freshSupportCaseReference },
     );
@@ -227,27 +254,62 @@ export class DeterministicMandateFlowRunner implements AgentRunner {
   }
 
   private async callTool(
-    capability: string,
+    request: RunnerRequest,
     name: string,
     argumentsValue: Record<string, unknown>,
   ): Promise<FixtureToolResult> {
-    const result = (await this.mcpRequest(capability, "tools/call", {
-      name,
-      arguments: argumentsValue,
-    })) as {
-      content?: Array<{ type?: unknown; text?: unknown }>;
-    };
-    const text = result.content?.find(
-      (content) => content.type === "text" && typeof content.text === "string",
-    )?.text;
-    if (typeof text !== "string") {
-      throw new Error(`MandateFlow fixture tool ${name} returned no structured result`);
+    const startedAt = Date.now();
+    request.onProgress?.({
+      ...createRunnerProgressEvent({
+        stage: "tool",
+        kind: "mcp",
+        state: "started",
+        title: "Protected tool call started",
+        detail: "MandateFlow is checking this call before the protected service runs.",
+        safeMetadata: { tool: name },
+      }),
+    });
+    try {
+      const result = (await this.mcpRequest(request.mandateFlowCapability, "tools/call", {
+        name,
+        arguments: argumentsValue,
+      })) as {
+        content?: Array<{ type?: unknown; text?: unknown }>;
+      };
+      const text = result.content?.find(
+        (content) => content.type === "text" && typeof content.text === "string",
+      )?.text;
+      if (typeof text !== "string") {
+        throw new Error(`MandateFlow fixture tool ${name} returned no structured result`);
+      }
+      const parsed = JSON.parse(text) as FixtureToolResult;
+      if (typeof parsed.ok !== "boolean" || typeof parsed.message !== "string") {
+        throw new Error(`MandateFlow fixture tool ${name} returned an invalid result`);
+      }
+      request.onProgress?.({
+        ...createRunnerProgressEvent({
+          stage: "tool",
+          kind: "mcp",
+          state: "completed",
+          title: "Protected tool call complete",
+          detail: "MandateFlow returned a redacted policy decision for this call.",
+          safeMetadata: { tool: name, durationMs: Date.now() - startedAt },
+        }),
+      });
+      return parsed;
+    } catch (error) {
+      request.onProgress?.({
+        ...createRunnerProgressEvent({
+          stage: "error",
+          kind: "error",
+          state: "failed",
+          title: "Protected tool call failed",
+          detail: "MandateFlow could not record a complete protected-tool result.",
+          safeMetadata: { tool: name, durationMs: Date.now() - startedAt },
+        }),
+      });
+      throw error;
     }
-    const parsed = JSON.parse(text) as FixtureToolResult;
-    if (typeof parsed.ok !== "boolean" || typeof parsed.message !== "string") {
-      throw new Error(`MandateFlow fixture tool ${name} returned an invalid result`);
-    }
-    return parsed;
   }
 
   private async mcpRequest(

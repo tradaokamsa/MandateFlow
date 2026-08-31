@@ -110,6 +110,17 @@ describe("Agent lifecycle", () => {
     expect(service.getRun(run.id).progress.map((event) => event.label)).toContain(
       "Running a workspace command",
     );
+    const activity = service.getRun(run.id).progress;
+    expect(activity.every((event) => event.runId === run.id)).toBe(true);
+    expect(activity.map((event) => event.sequence)).toEqual(
+      activity.map((event) => event.sequence).sort((left, right) => left - right),
+    );
+    expect(activity.some((event) => event.kind === "command" && event.state === "started")).toBe(true);
+    expect(activity.at(-1)).toMatchObject({
+      kind: "status",
+      state: "completed",
+      title: "Run complete",
+    });
     const messages = service.getMessages(agent.id);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
