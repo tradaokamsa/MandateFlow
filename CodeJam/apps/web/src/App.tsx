@@ -1029,7 +1029,7 @@ export default function App() {
                 activeRun={activeRun}
                 busy={busy}
                 canRun={runtimeReady && !revokePending && selected.status !== "stopped" && mandate?.status !== "REVOKED"}
-                canRetry={hasRetryableDenial && !revokePending && Boolean(evidence) && mandate?.status !== "REVOKED"}
+                canRetry={hasRetryableDenial && activeRun?.status === "completed" && !revokePending && Boolean(evidence) && mandate?.status !== "REVOKED"}
                 canStop={selected.status === "busy"}
                 blockedReason={
                   mandate?.status === "REVOKED"

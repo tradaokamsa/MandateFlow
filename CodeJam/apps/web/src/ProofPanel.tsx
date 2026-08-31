@@ -35,6 +35,7 @@ export function ProofPanel({
     ? Date.now() - new Date(currentProgress.createdAt).getTime()
     : 0;
   const runtimeStalled = isRunning && progressAge > 12_000;
+  const proofIncomplete = activeRun?.status === "failed";
 
   return (
     <section className="proof-console" aria-labelledby="proof-console-title">
@@ -128,7 +129,7 @@ export function ProofPanel({
               <span>{row.detail}</span>
             </span>
             <span className="proof-row-status">
-              {row.state === "complete" ? "Verified" : "Pending"}
+              {row.state === "complete" ? "Verified" : proofIncomplete ? "Not recorded" : "Pending"}
             </span>
           </div>
         ))}

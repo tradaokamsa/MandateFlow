@@ -445,6 +445,34 @@ describe("MandateFlow lifecycle", () => {
     });
   });
 
+  it("fails closed when a proof response omits required gateway evidence", async () => {
+    const mandateFlow = new FakeMandateFlow();
+    const service = await makeService(new FakeRunner(), mandateFlow);
+    const agent = await service.createAgent({ name: "Incomplete Proof Agent" });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "Run the MandateFlow verification workflow.",
+    );
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("failed");
+    expect(service.getRun(run.id)).toMatchObject({
+      output: null,
+      error: expect.stringContaining("MandateFlow proof is incomplete"),
+    });
+    expect(service.getRun(run.id).progress).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Proof evidence incomplete",
+          state: "failed",
+        }),
+      ]),
+    );
+    expect(service.getMessages(agent.id).map((message) => message.role)).toEqual([
+      "user",
+    ]);
+    expect(mandateFlow.events.some((event) => event.startsWith("finish:FAILED"))).toBe(true);
+  });
+
   it("rejects Retry when the completed Run has no provenance-denied CRM call", async () => {
     const mandateFlow = new FakeMandateFlow();
     const service = await makeService(new FakeRunner(), mandateFlow);
