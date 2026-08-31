@@ -46,7 +46,8 @@ Volcengine ECS.
 - Node.js 22+
 - npm 10+
 - Docker, Colima, or Podman
-- A Groq API key only for the optional live `container` Runtime profile
+- A Groq API key for the live Agent demonstration (`container` Runtime profile)
+- No Groq key is needed for the deterministic middleware-only fallback
 
 Codex CLI is included in the Runtime image and is not required on the host.
 
@@ -75,20 +76,40 @@ cd volc-agent-launchpad
 
 Skip this step when already working from the repository root.
 
-### 3. Start the POC
+### 3. Start the live Agent demonstration
 
 ```bash
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+export RUNTIME_PROVIDER=container
+export GROQ_API_KEY='your-real-groq-api-key'
+export GROQ_MODEL='openai/gpt-oss-120b'
 npm run poc
 ```
 
 The first run installs Node.js dependencies, runs the Go test target, builds the
-MandateFlow image, and starts the credential-free deterministic fixture Runtime.
-The script automatically selects Docker, Colima, or Podman. Enter
-`APP_AUTH_TOKEN` in the browser unlock screen. The fixture still crosses
-Fastify → Streamable HTTP MCP → Go → SQLite → API/UI and needs no model
-credential. For the live Codex path, set `RUNTIME_PROVIDER=container` and
-`GROQ_API_KEY`.
+MandateFlow image and the disposable Codex Runtime image, then starts the live
+Codex Agent through Groq. The script automatically selects Docker, Colima, or
+Podman. Enter `APP_AUTH_TOKEN` in the browser unlock screen. The startup log
+must say `Runtime provider: container`; if it says `fixture`, the Groq key was
+not loaded.
+
+If this checkout stores the raw Groq key in `../api_key.txt` at the repository
+root, load it without printing it:
+
+```bash
+export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
+```
+
+For a middleware-only run without a model credential, use the deterministic
+fallback explicitly:
+
+```bash
+export RUNTIME_PROVIDER=fixture
+npm run poc
+```
+
+Fixture mode still crosses Fastify → Streamable HTTP MCP → Go → SQLite → API/UI,
+but it is proof-only and does not demonstrate a general coding Agent.
 
 ### 4. Open the browser
 
@@ -104,7 +125,19 @@ In the Web UI:
 1. Select **Create Agent**.
 2. Enter a name, description, and workspace instructions.
 3. Select **Create Agent** again.
-4. Select the first starter prompt, which runs the deterministic proof:
+4. Select **Start** for the new Agent.
+5. In live `container` mode, select the coding starter prompt:
+
+   ```text
+   Create a small TypeScript CLI that prints a weather summary from sample JSON.
+   ```
+
+   Watch **Runtime activity** while the real Agent is queued, authorized,
+   started, using tools, and finalized. Inspect the assistant response and the
+   workspace result.
+6. Select **New secure workflow**.
+7. In the proof console, select **Run MandateFlow proof**, which runs the
+   deterministic security workflow below:
 
    ```text
    Run the MandateFlow verification workflow. First, list the open Support ticket,
@@ -140,9 +173,9 @@ under the new capability.
 During a Run, the **Runtime activity** rail is the progress surface. It reports
 queued, authorization, Runtime/tool work, finalization, terminal, and failure
 states with timestamps. A stale active Run offers **Stop run** instead of
-leaving the user with an indefinite spinner. The fixture profile is intentionally
-proof-only: it verifies the MandateFlow path but does not provide a general
-coding Agent. The live `container` profile is required for Codex-backed coding.
+leaving the user with an indefinite spinner. The live `container` profile is
+required for Codex-backed coding. The `fixture` profile is intentionally
+proof-only and exposes only **Run MandateFlow proof**.
 
 Form and recovery behavior is deliberately visible: access-token errors stay
 next to the field, Create/Edit errors keep the form open, native owner selection
@@ -156,19 +189,21 @@ recoverable error in the same dialog when a request fails.
 Use the completed Run's proof console and decision journal as the demo surface.
 Walk through the story in this order:
 
-1. **Establish trust:** show **MandateFlow ready**, **New secure workflow**, and
+1. **Start with a real Agent:** show the coding prompt, the Runtime activity
+   rail, the assistant response, and the workspace change.
+2. **Establish trust:** show **MandateFlow ready**, **New secure workflow**, and
    the server-derived Mandate Summary.
-2. **Trusted Support path:** `Support → Case → CRM` is `ALLOW`; the CRM counter
+3. **Trusted Support path:** `Support → Case → CRM` is `ALLOW`; the CRM counter
    moves `0 → 1` and the receipt is `COMPLETED`.
-3. **Unsafe Payment path:** the same public Case type and CRM method are
+4. **Unsafe Payment path:** the same public Case type and CRM method are
    `FLOW_DENIED` by `NO_PAYMENT_REIDENTIFICATION` at `PRE_EXECUTION`. The
    outcome is `NOT_INVOKED` and the counter stays `1 → 1`.
-4. **Safe recovery:** `payments.aggregate_failures` succeeds, followed by a
+5. **Safe recovery:** `payments.aggregate_failures` succeeds, followed by a
    fresh Support path that moves the counter `1 → 2`.
-5. **Retry without inherited trust:** **Retry denied call** creates fresh Run
+6. **Retry without inherited trust:** **Retry denied call** creates fresh Run
    authority but preserves policy context and Payment lineage; it is denied
    again without repeating derivation.
-6. **Revoke and reset:** **Revoke mandate** locks Send/Retry, and **New secure
+7. **Revoke and reset:** **Revoke mandate** locks Send/Retry, and **New secure
    workflow** creates a fresh context that cannot accept old references.
 
 Expand at least one allowed receipt and the denied receipt so the audience can
