@@ -1,26 +1,40 @@
 # MandateFlow three-minute demo
 
-## Start
+## Start the live Agent demo
 
 Use Node.js 22+ and a running Docker, Colima, or Podman engine:
 
 ```bash
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+export RUNTIME_PROVIDER=container
+export GROQ_API_KEY='your-real-groq-api-key'
+export GROQ_MODEL='openai/gpt-oss-120b'
 npm run poc
 ```
 
-No model credential is needed: the launcher selects the deterministic fixture
-Runtime when `GROQ_API_KEY` is absent or a placeholder. For the optional live
-Codex rehearsal, use `RUNTIME_PROVIDER=container GROQ_API_KEY=...`.
+The startup log must say `Runtime provider: container`. This is the path that
+demonstrates the real Codex Agent through Groq. If the key is stored as a raw
+value in `../api_key.txt`, load it without printing it:
 
-The credential-free fixture profile is intentionally proof-only: it exercises
-the full MandateFlow gateway path but does not pretend to be a general coding
-Agent. Use the live Codex profile for workspace inspection, edits, and command
-execution.
+```bash
+export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
+```
+
+To verify only the middleware without using model tokens, restart with
+`RUNTIME_PROVIDER=fixture`. Fixture mode is intentionally proof-only and does
+not demonstrate a general coding Agent.
 
 Open <http://localhost:3000>, unlock with `APP_AUTH_TOKEN`, create an Agent, and
-select **New secure workflow**. In the proof console, select **Run MandateFlow
-proof**, or choose the first starter prompt to run the same workflow manually:
+select **Start**. First run the coding prompt:
+
+```text
+Create a small TypeScript CLI that prints a weather summary from sample JSON.
+```
+
+Show the timestamped **Runtime activity** timeline, assistant response, and
+workspace change. Then select **New secure workflow**. In the proof console,
+select **Run MandateFlow proof**, or choose the first starter prompt to run the
+same security workflow manually:
 
 ```text
 Run the MandateFlow verification workflow. First, list the open Support ticket,
@@ -40,21 +54,23 @@ provider rate-limit and timeout errors into plain-language recovery guidance.
 
 ## User flows for the demo
 
-1. **Establish trust:** the header reports `MandateFlow ready`; create a fresh
+1. **Demonstrate the Agent:** show the live coding prompt, Runtime activity,
+   assistant response, and workspace result.
+2. **Establish trust:** the header reports `MandateFlow ready`; create a fresh
    secure workflow and show its Mandate Summary.
-2. **Trusted Support path:** the decision journal shows Support → Case → CRM as
+3. **Trusted Support path:** the decision journal shows Support → Case → CRM as
    `ALLOW`; the CRM counter changes from `0` to `1`.
-3. **Unsafe Payment path:** the same public Case kind reaches the same CRM
+4. **Unsafe Payment path:** the same public Case kind reaches the same CRM
    method, but static scope is `ALLOW`, provenance is `DENY`, outcome is
    `NOT_INVOKED`, and the counter stays `1 → 1`.
-4. **Safe recovery:** `payments.aggregate_failures` succeeds, followed by a
+5. **Safe recovery:** `payments.aggregate_failures` succeeds, followed by a
    fresh Support ticket, Case transformation, and CRM resolution. The counter
    changes from `1` to `2`.
-5. **Retry without inherited trust:** **Retry denied call** keeps the policy
+6. **Retry without inherited trust:** **Retry denied call** keeps the policy
    context and prior causal receipts but uses a different Runtime, Run-grant
    ID, and capability fingerprint. CRM is denied again without repeating
    Payment or Case lookup.
-6. **Revoke and reset:** **Revoke mandate** locks the workflow; **New secure
+7. **Revoke and reset:** **Revoke mandate** locks the workflow; **New secure
    workflow** creates a fresh policy context, and old references cannot cross
    into it. The locked mandate keeps a **Start new secure workflow** action next
    to the recovery explanation.

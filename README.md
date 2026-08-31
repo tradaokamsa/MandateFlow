@@ -31,28 +31,44 @@ than three minutes of live interaction.
 - macOS or Linux
 - Node.js 22+ and npm 10+
 - Docker, Colima, or rootless Podman
-- A Groq API key only when using the live `container` Runtime profile
+- A Groq API key for the live Agent demonstration (`container` Runtime profile)
+- No Groq key is needed for the deterministic middleware-only fallback
 
-### Start the proof of concept
+### Start the live Agent demonstration
 
 ```bash
 git clone https://github.com/tradaokamsa/MandateFlow.git
 cd MandateFlow/CodeJam
 
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+export RUNTIME_PROVIDER=container
+export GROQ_API_KEY='your-real-groq-api-key'
+export GROQ_MODEL='openai/gpt-oss-120b'
 npm run poc
 ```
 
 The launcher installs dependencies when needed, builds the Go sidecar and
-starts the credential-free deterministic fixture Runtime by default, creates an
-instance network, and starts the production Web/API bundle at
-<http://localhost:3000>. Enter the generated `APP_AUTH_TOKEN` in the browser
-unlock screen. The script automatically selects Docker, Colima, or Podman; set
+starts a disposable Codex Runtime backed by Groq, creates an instance network,
+and starts the production Web/API bundle at <http://localhost:3000>. Enter the
+generated `APP_AUTH_TOKEN` in the browser unlock screen. The startup log must
+say `Runtime provider: container`; if it says `fixture`, the Groq key was not
+loaded. The script automatically selects Docker, Colima, or Podman; set
 `CONTAINER_ENGINE=podman` to force Podman.
 
-The fixture Runtime traverses the same Fastify → Go MCP → SQLite → UI/API path
-without a model credential. To rehearse with Codex and Groq instead, set
-`RUNTIME_PROVIDER=container GROQ_API_KEY=...` before `npm run poc`.
+If a local checkout stores the raw key in `api_key.txt` at the repository root,
+load it without printing it:
+
+```bash
+export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
+```
+
+The credential-free fixture Runtime remains available for middleware-only
+verification:
+
+```bash
+export RUNTIME_PROVIDER=fixture
+npm run poc
+```
 
 ### Run it end to end
 
@@ -60,15 +76,18 @@ without a model credential. To rehearse with Codex and Groq instead, set
    generated `APP_AUTH_TOKEN` in the unlock screen.
 2. Select **Create Agent**, enter any name/description/instructions, and create
    the Agent. The default demo owner is `user-a`.
-3. Select **New secure workflow** so the run starts with a fresh mandate and
-   policy context.
-4. In the proof console, select **Run MandateFlow proof**. It runs the same
-   deterministic workflow as the first starter prompt below. Wait for the Run
-   to complete, then open the decision journal and expand the receipts.
-5. Select **Retry denied call** and show that the Payment-derived CRM call is
+3. Select **Start** for the new Agent. Send the coding starter prompt
+   **Create a small TypeScript CLI that prints a weather summary from sample
+   JSON.** Watch **Runtime activity** show the queued, authorization, Runtime,
+   tool-work, and finalization stages, then inspect the workspace result.
+4. Select **New secure workflow** so the next run starts with a fresh mandate
+   and policy context.
+5. In the proof console, select **Run MandateFlow proof**. Wait for the Run to
+   complete, then open the decision journal and expand the receipts.
+6. Select **Retry denied call** and show that the Payment-derived CRM call is
    denied again with fresh Run authority but the same policy context and
    lineage.
-6. Select **Revoke mandate**, confirm, then select **New secure workflow**.
+7. Select **Revoke mandate**, confirm, then select **New secure workflow**.
    Send and Retry are blocked while revoked; the next proof starts with a fresh
    policy context and old references cannot cross into it.
 
@@ -86,25 +105,33 @@ identifiers.
 
 ### User flows for the demo
 
-The demo tells one compact story: MandateFlow lets an Agent follow trusted
-Support data, blocks the same-looking Payment data at the protected boundary,
-and still lets the Agent recover safely without exposing sensitive references.
-Open the completed Run's proof console and decision journal as you walk through
-these flows.
+The demo has two connected stories: first, a real Codex Agent performs a small
+workspace change through the Groq Runtime; second, the same Agent platform
+proves that MandateFlow allows trusted Support data, blocks the same-looking
+Payment data at the protected boundary, and recovers safely without exposing
+sensitive references. Open the Runtime activity rail for the coding run, then
+use the completed proof's console and decision journal for the security story.
 
 #### Flow 1 — Establish a secure workflow
 
-Create an Agent, select **New secure workflow**, and point out the
+Create an Agent, select **Start**, then point out the
 **MandateFlow ready** header and server-derived Mandate Summary. This establishes
-that the session has a fresh mandate and policy context before any protected
+that the Agent Runtime and a fresh policy context are ready before any protected
 tool is called.
 
-#### Flow 2 — Follow a trusted Support path
+#### Flow 2 — Demonstrate the Agent Runtime
+
+Send **Create a small TypeScript CLI that prints a weather summary from sample
+JSON.** Show the timestamped Runtime activity stages, the assistant response,
+and the changed workspace. This is the live Codex/Groq portion of the demo; it
+is not available in `fixture` mode.
+
+#### Flow 3 — Follow a trusted Support path
 
 Run **MandateFlow proof** and show `Support → Case → CRM` as `ALLOW`. The CRM
 counter moves from `0 → 1`, and the allowed receipt is marked `COMPLETED`.
 
-#### Flow 3 — Block unsafe re-identification
+#### Flow 4 — Block unsafe re-identification
 
 The Agent uses the same public Case type and the same CRM method for a
 Payment-derived reference. Static scope is still `ALLOW`, but trusted
@@ -113,19 +140,19 @@ provenance is `DENY`: rule `NO_PAYMENT_REIDENTIFICATION` blocks the call at
 `1 → 1`. This is the key moment: the gateway stops the flow before the
 protected fixture runs.
 
-#### Flow 4 — Recover with the least privilege path
+#### Flow 5 — Recover with the least privilege path
 
 Show `payments.aggregate_failures` succeeding as the safe alternative. The
 Agent then fetches a fresh Support ticket and completes a second CRM resolution;
 the counter moves from `1 → 2`. No Payment reference is re-identified.
 
-#### Flow 5 — Retry without inheriting trust
+#### Flow 6 — Retry without inheriting trust
 
 Select **Retry denied call**. The retry has a new Run, Runtime, grant, and
 capability fingerprint, while preserving the policy context and Payment
 lineage. It is denied again without repeating the Payment or Case derivation.
 
-#### Flow 6 — Revoke and start clean
+#### Flow 7 — Revoke and start clean
 
 Select **Revoke mandate**, confirm it, and show that Send and Retry are locked.
 Select **New secure workflow** to create a fresh policy context. The old
