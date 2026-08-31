@@ -77,6 +77,19 @@ function friendlyRunError(value: string | null): string {
   return message;
 }
 
+function friendlyRequestError(value: unknown, fallback: string): string {
+  if (value instanceof ApiError) {
+    if (value.status === 401) return "Your access token is no longer valid. Enter it again.";
+    if (value.status === 404) return "That Agent or workflow is no longer available. Refresh and try again.";
+    if (value.status >= 500) return fallback;
+    return value.message;
+  }
+  if (value instanceof TypeError && /fetch/i.test(value.message)) {
+    return "The local control plane is unavailable. Start npm run poc and try again.";
+  }
+  return value instanceof Error ? value.message : fallback;
+}
+
 function StatusPill({ status }: { status: Agent["status"] }) {
   return (
     <span className={"status status-" + status}>
@@ -107,6 +120,10 @@ export default function App() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [revokeNotice, setRevokeNotice] = useState<string | null>(null);
   const [workflowNotice, setWorkflowNotice] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [expandedReceiptId, setExpandedReceiptId] = useState<string | null>(null);
   const [showMobileAgents, setShowMobileAgents] = useState(false);
   const [showAuthToken, setShowAuthToken] = useState(false);
@@ -115,6 +132,9 @@ export default function App() {
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [authInput, setAuthInput] = useState("");
   const messageEnd = useRef<HTMLDivElement>(null);
+  const createDialog = useRef<HTMLFormElement>(null);
+  const createNameInput = useRef<HTMLInputElement>(null);
+  const settingsNameInput = useRef<HTMLInputElement>(null);
   const confirmationDialog = useRef<HTMLElement>(null);
   const revokeTrigger = useRef<HTMLButtonElement>(null);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
@@ -132,6 +152,12 @@ export default function App() {
     () => agents.find((agent) => agent.id === selectedId) ?? null,
     [agents, selectedId],
   );
+
+  useEffect(() => {
+    document.title = selected
+      ? `${selected.name} — MandateFlow`
+      : "MandateFlow — Agent Launchpad";
+  }, [selected]);
   const hasRetryableDenial = Boolean(
     activeRun &&
       !activeRun.retryOfRunId &&
@@ -193,7 +219,7 @@ export default function App() {
         setAuthRequired(required);
         if (!required) await bootstrap();
       })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+      .catch((reason) => setError(friendlyRequestError(reason, "The control plane could not be reached.")));
     return () => {
       mountedRef.current = false;
     };
@@ -219,23 +245,23 @@ export default function App() {
         setActiveRun(latest);
         if (latest && ["queued", "running"].includes(latest.status)) {
           void pollRun(latest.id, selectedId).catch((reason) =>
-            setError(reason instanceof Error ? reason.message : String(reason)),
+            setError(friendlyRequestError(reason, "Run activity could not be refreshed.")),
           );
         } else if (latest?.policyContextId) {
           void refreshEvidence(latest).catch((reason) =>
-            setError(reason instanceof Error ? reason.message : String(reason)),
+            setError(friendlyRequestError(reason, "Decision evidence could not be loaded.")),
           );
         }
       })
       .catch((reason) =>
-        setError(reason instanceof Error ? reason.message : String(reason)),
+        setError(friendlyRequestError(reason, "The Agent workspace could not be loaded.")),
       );
   }, [refreshEvidence, refreshMessages, selectedId]);
 
   useEffect(() => {
     if (!selectedId || !system?.mandateFlowEnabled) return;
     void refreshMandate(selectedId).catch((reason) =>
-      setError(reason instanceof Error ? reason.message : String(reason)),
+      setError(friendlyRequestError(reason, "The mandate summary could not be loaded.")),
     );
   }, [refreshMandate, selectedId, system?.mandateFlowEnabled]);
 
@@ -255,15 +281,17 @@ export default function App() {
   }, [messages, activeRun]);
 
   useEffect(() => {
-    if (!showRevokeConfirm && !showDeleteConfirm) return;
+    if (!showCreate && !showRevokeConfirm && !showDeleteConfirm) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (showCreate) setShowCreate(false);
         setShowRevokeConfirm(false);
         setShowDeleteConfirm(false);
         return;
       }
       if (event.key === "Tab") {
-        const focusable = confirmationDialog.current?.querySelectorAll<HTMLElement>(
+        const dialog = showCreate ? createDialog.current : confirmationDialog.current;
+        const focusable = dialog?.querySelectorAll<HTMLElement>(
           "button, input, select, textarea, [tabindex]:not([tabindex='-1'])",
         );
         if (!focusable?.length) return;
@@ -280,7 +308,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showDeleteConfirm, showRevokeConfirm]);
+  }, [showCreate, showDeleteConfirm, showRevokeConfirm]);
 
   useEffect(() => {
     if (!showMobileAgents) {
@@ -323,16 +351,27 @@ export default function App() {
 
   const createAgent = async (event: React.FormEvent) => {
     event.preventDefault();
+    const name = form.name.trim();
+    if (!name) {
+      setFormError("Enter a name for this Agent.");
+      requestAnimationFrame(() => createNameInput.current?.focus());
+      return;
+    }
     setBusy(true);
     setError(null);
+    setFormError(null);
     try {
-      const { agent } = await api.createAgent(form);
+      const { agent } = await api.createAgent({ ...form, name });
       await refreshAgents();
       setSelectedId(agent.id);
       setShowCreate(false);
       setForm(emptyForm);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setFormError(
+        reason instanceof ApiError && reason.status === 400
+          ? "Check the Agent details and try again."
+          : "The Agent could not be created. Check the Runtime connection and try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -341,15 +380,26 @@ export default function App() {
   const saveAgent = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!selected) return;
+    const name = form.name.trim();
+    if (!name) {
+      setSettingsError("Enter a name for this Agent.");
+      requestAnimationFrame(() => settingsNameInput.current?.focus());
+      return;
+    }
     setBusy(true);
     setError(null);
+    setSettingsError(null);
     try {
       const { ownerPrincipal: _ownerPrincipal, ...editable } = form;
-      await api.updateAgent(selected.id, editable);
+      await api.updateAgent(selected.id, { ...editable, name });
       await refreshAgents();
       setShowSettings(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setSettingsError(
+        reason instanceof ApiError && reason.status === 400
+          ? "Check the Agent details and try again."
+          : "The Agent could not be saved. Check the Runtime connection and try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -367,7 +417,7 @@ export default function App() {
       }
       await refreshAgents();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(friendlyRequestError(reason, "The Agent state could not be changed."));
     } finally {
       setBusy(false);
     }
@@ -375,14 +425,15 @@ export default function App() {
 
   const deleteAgent = async () => {
     if (!selected) return;
-    setShowDeleteConfirm(false);
     setBusy(true);
     setError(null);
+    setDeleteError(null);
     try {
       await api.deleteAgent(selected.id);
+      setShowDeleteConfirm(false);
       await refreshAgents();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+    } catch {
+      setDeleteError("The Agent could not be deleted. Try again when the control plane is available.");
     } finally {
       setBusy(false);
     }
@@ -399,7 +450,7 @@ export default function App() {
         if (selectedIdRef.current === agentId) setActiveRun(result.run);
         if (result.run.mandateId) {
           void refreshMandate(agentId).catch((reason) =>
-            setError(reason instanceof Error ? reason.message : String(reason)),
+            setError(friendlyRequestError(reason, "The mandate summary could not be refreshed.")),
           );
         }
         if (!["queued", "running"].includes(result.run.status)) {
@@ -433,7 +484,7 @@ export default function App() {
       );
       await pollRun(result.run.id, result.run.agentId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(friendlyRequestError(reason, "The retry could not be completed."));
       await refreshAgents();
     } finally {
       setBusy(false);
@@ -457,7 +508,7 @@ export default function App() {
       );
       await refreshAgents();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(friendlyRequestError(reason, "A new secure workflow could not be started."));
     } finally {
       setBusy(false);
     }
@@ -465,9 +516,9 @@ export default function App() {
 
   const revokeMandate = async () => {
     if (!mandate || revokePending) return;
-    setShowRevokeConfirm(false);
     setRevokePending(true);
     setRevokeNotice(null);
+    setRevokeError(null);
     setError(null);
     try {
       const result = await api.revokeMandate(mandate.mandateId);
@@ -479,15 +530,15 @@ export default function App() {
       setRevokeNotice(
         "Mandate revoked. The active Runtime was cancelled and this workflow is locked.",
       );
+      setShowRevokeConfirm(false);
       await Promise.all([
         refreshMessages(result.agent.id),
         refreshAgents(),
         result.run?.policyContextId ? refreshEvidence(result.run) : Promise.resolve(),
         refreshMandate(result.agent.id),
       ]);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-      setRevokeNotice("Mandate revocation failed; no cancellation was claimed.");
+    } catch {
+      setRevokeError("Mandate revocation failed. No cancellation was claimed; try again.");
     } finally {
       setRevokePending(false);
     }
@@ -522,7 +573,7 @@ export default function App() {
       );
       await pollRun(result.run.id, agentId);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(friendlyRequestError(reason, "The Run could not be started."));
       setActiveRun(null);
       await refreshAgents();
     }
@@ -558,7 +609,7 @@ export default function App() {
       if (reason instanceof ApiError && reason.status === 401) {
         setError("The access token is not valid.");
       } else {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(friendlyRequestError(reason, "The control plane could not be reached."));
       }
     } finally {
       setBusy(false);
@@ -586,16 +637,19 @@ export default function App() {
           <span className="eyebrow">MandateFlow</span>
           <h1>Enter the access token</h1>
           <p>This shared demo token is configured by the platform operator.</p>
-          {error && <div className="error-banner" role="alert">{error}</div>}
+          {error && <div className="error-banner" id="auth-error" role="alert">{error}</div>}
           <label>
             Access token
             <span className="secret-input">
               <input
+                id="access-token"
                 autoFocus
                 type={showAuthToken ? "text" : "password"}
                 value={authInput}
                 onChange={(event) => setAuthInput(event.target.value)}
                 autoComplete="current-password"
+                aria-invalid={Boolean(error)}
+                aria-describedby={error ? "auth-error" : undefined}
                 required
               />
               <button
@@ -609,7 +663,7 @@ export default function App() {
               </button>
             </span>
           </label>
-          <button className="button button-primary" disabled={busy || !authInput.trim()}>
+          <button type="submit" className="button button-primary" disabled={busy || !authInput.trim()}>
             {busy ? <Spinner /> : "Open MandateFlow"}
           </button>
         </form>
@@ -656,10 +710,12 @@ export default function App() {
         </div>
 
         <button
+          type="button"
           className="button button-primary create-button"
           onClick={() => {
             setShowMobileAgents(false);
             setForm(emptyForm);
+            setFormError(null);
             setShowCreate(true);
           }}
         >
@@ -673,6 +729,7 @@ export default function App() {
         <nav className="agent-list">
           {agents.map((agent) => (
             <button
+              type="button"
               className={"agent-card " + (agent.id === selectedId ? "selected" : "")}
               key={agent.id}
               onClick={() => {
@@ -732,7 +789,7 @@ export default function App() {
         {error && (
           <div className="error-banner" role="alert">
             <span>{error}</span>
-            <button onClick={() => setError(null)}>×</button>
+            <button type="button" onClick={() => setError(null)} aria-label="Dismiss error">×</button>
           </div>
         )}
 
@@ -749,6 +806,7 @@ export default function App() {
               <div className="header-actions">
                 {system?.mandateFlowEnabled && (
                   <button
+                    type="button"
                     className="button button-ghost"
                     onClick={newDemoWorkflow}
                     disabled={busy || revokePending || selected.status === "busy"}
@@ -758,6 +816,7 @@ export default function App() {
                 )}
                 {system?.mandateFlowEnabled && activeRun?.status === "completed" && hasRetryableDenial && (
                   <button
+                    type="button"
                     className="button button-primary"
                     onClick={retryRun}
                     disabled={busy || revokePending || selected.status === "busy" || !evidence || mandate?.status === "REVOKED"}
@@ -766,13 +825,26 @@ export default function App() {
                   </button>
                 )}
                 <button
+                  type="button"
                   className="button button-ghost"
-                  onClick={() => setShowSettings((value) => !value)}
+                  onClick={() => {
+                    setSettingsError(null);
+                    if (!showSettings) {
+                      setForm({
+                        name: selected.name,
+                        description: selected.description,
+                        ownerPrincipal: selected.ownerPrincipal,
+                        instructions: selected.instructions,
+                      });
+                    }
+                    setShowSettings((value) => !value);
+                  }}
                   disabled={busy || revokePending || selected.status === "busy"}
                 >
                   Settings
                 </button>
                 <button
+                  type="button"
                   className="button button-ghost"
                   onClick={toggleAgent}
                   disabled={busy || revokePending}
@@ -784,9 +856,13 @@ export default function App() {
                       : "Stop Agent"}
                 </button>
                 <button
+                  type="button"
                   className="button button-danger"
                   ref={deleteTrigger}
-                  onClick={() => setShowDeleteConfirm(true)}
+                  onClick={() => {
+                    setDeleteError(null);
+                    setShowDeleteConfirm(true);
+                  }}
                   disabled={busy || revokePending || selected.status === "busy"}
                 >
                   Delete
@@ -795,20 +871,27 @@ export default function App() {
             </header>
 
             {showSettings && (
-              <form className="settings-panel" onSubmit={saveAgent} noValidate>
+              <form className="settings-panel" onSubmit={saveAgent} noValidate aria-labelledby="settings-title">
                 <div className="settings-title">
                   <div>
                     <span className="eyebrow">Agent configuration</span>
-                    <h2>Instructions and identity</h2>
+                    <h2 id="settings-title">Instructions and identity</h2>
                   </div>
-                  <button type="button" onClick={() => setShowSettings(false)}>×</button>
+                  <button type="button" onClick={() => setShowSettings(false)} aria-label="Close settings">×</button>
                 </div>
+                {settingsError && <div className="field-error" id="settings-error" role="alert">{settingsError}</div>}
                 <div className="form-grid">
                   <label>
                     Name
                     <input
+                      ref={settingsNameInput}
                       value={form.name}
-                      onChange={(event) => setForm({ ...form, name: event.target.value })}
+                      aria-invalid={Boolean(settingsError)}
+                      aria-describedby={settingsError ? "settings-error" : undefined}
+                      onChange={(event) => {
+                        setSettingsError(null);
+                        setForm({ ...form, name: event.target.value });
+                      }}
                       required
                       maxLength={80}
                     />
@@ -817,9 +900,10 @@ export default function App() {
                     Description
                     <input
                       value={form.description}
-                      onChange={(event) =>
-                        setForm({ ...form, description: event.target.value })
-                      }
+                      onChange={(event) => {
+                        setSettingsError(null);
+                        setForm({ ...form, description: event.target.value });
+                      }}
                       maxLength={500}
                     />
                   </label>
@@ -829,16 +913,17 @@ export default function App() {
                   <textarea
                     className="resize-none"
                     value={form.instructions}
-                    onChange={(event) =>
-                      setForm({ ...form, instructions: event.target.value })
-                    }
+                    onChange={(event) => {
+                      setSettingsError(null);
+                      setForm({ ...form, instructions: event.target.value });
+                    }}
                     rows={5}
                     maxLength={10_000}
                   />
                 </label>
                 <div className="panel-footer">
                   <code>{selected.workspacePath}</code>
-                  <button className="button button-primary" disabled={busy}>
+                  <button type="submit" className="button button-primary" disabled={busy}>
                     {busy ? <Spinner /> : "Save changes"}
                   </button>
                 </div>
@@ -947,9 +1032,13 @@ export default function App() {
                         </div>
                       ) : (
                         <button
+                          type="button"
                           className="button button-danger revoke-button"
                           ref={revokeTrigger}
-                          onClick={() => setShowRevokeConfirm(true)}
+                          onClick={() => {
+                            setRevokeError(null);
+                            setShowRevokeConfirm(true);
+                          }}
                           disabled={revokePending}
                         >
                           {revokePending ? <><Spinner /> Revoking…</> : "Revoke mandate"}
@@ -1012,7 +1101,7 @@ export default function App() {
                 </div>
               )}
 
-              <div className="messages">
+              <section className="messages" aria-label="Agent conversation">
                 {messages.length === 0 && !activeRun ? (
                   <div className="welcome">
                     <div className="welcome-orbit">
@@ -1026,7 +1115,7 @@ export default function App() {
                     </p>
                     <div className="prompt-grid">
                       {visibleStarterPrompts.map((item) => (
-                        <button key={item} onClick={() => setPrompt(item)}>
+                        <button type="button" key={item} onClick={() => setPrompt(item)}>
                           <span>↗</span>
                           {item}
                         </button>
@@ -1084,7 +1173,7 @@ export default function App() {
                   </article>
                 )}
                 <div ref={messageEnd} />
-              </div>
+              </section>
 
               <form className="composer" onSubmit={sendMessage} noValidate>
                 <textarea
@@ -1120,6 +1209,7 @@ export default function App() {
                     Enter to send · Shift + Enter for newline · {system?.codexSandboxMode ?? "checking sandbox"}
                   </span>
                   <button
+                    type="submit"
                     className="send-button"
                     disabled={
                       !prompt.trim() ||
@@ -1150,9 +1240,11 @@ export default function App() {
                 : "Resolve the runtime notice above before starting a secure Agent workflow."}
             </p>
             <button
+              type="button"
               className="button button-primary"
               onClick={() => {
                 setForm(emptyForm);
+                setFormError(null);
                 setShowCreate(true);
               }}
             >
@@ -1219,6 +1311,7 @@ export default function App() {
               onClick={() => {
                 setShowMobileAgents(false);
                 setForm(emptyForm);
+                setFormError(null);
                 setShowCreate(true);
               }}
             >
@@ -1229,7 +1322,12 @@ export default function App() {
       )}
 
       {showRevokeConfirm && mandate && (
-        <div className="modal-backdrop" onMouseDown={() => setShowRevokeConfirm(false)}>
+        <div
+          className="modal-backdrop"
+          onMouseDown={() => {
+            if (!revokePending) setShowRevokeConfirm(false);
+          }}
+        >
           <section
             className="modal confirmation-modal"
             role="dialog"
@@ -1244,22 +1342,31 @@ export default function App() {
                 <span className="eyebrow">Security action</span>
                 <h2 id="revoke-dialog-title">Revoke this mandate?</h2>
               </div>
-              <button type="button" onClick={() => setShowRevokeConfirm(false)} aria-label="Close confirmation">×</button>
+              <button
+                type="button"
+                onClick={() => setShowRevokeConfirm(false)}
+                disabled={revokePending}
+                aria-label="Close confirmation"
+              >
+                ×
+              </button>
             </div>
             <p id="revoke-dialog-description">
               This stops the active Runtime, invalidates its current capability, and prevents follow-up or retry calls in this workflow. The decision journal remains available.
             </p>
+            {revokeError && <div className="field-error" role="alert">{revokeError}</div>}
             <div className="modal-footer">
               <button
                 type="button"
                 className="button button-ghost"
                 autoFocus
                 onClick={() => setShowRevokeConfirm(false)}
+                disabled={revokePending}
               >
                 Keep mandate
               </button>
-              <button type="button" className="button button-danger" onClick={revokeMandate}>
-                Revoke mandate
+              <button type="button" className="button button-danger" onClick={revokeMandate} disabled={revokePending}>
+                {revokePending ? <><Spinner /> Revoking…</> : "Revoke mandate"}
               </button>
             </div>
           </section>
@@ -1267,7 +1374,12 @@ export default function App() {
       )}
 
       {showDeleteConfirm && selected && (
-        <div className="modal-backdrop" onMouseDown={() => setShowDeleteConfirm(false)}>
+        <div
+          className="modal-backdrop"
+          onMouseDown={() => {
+            if (!busy) setShowDeleteConfirm(false);
+          }}
+        >
           <section
             className="modal confirmation-modal"
             role="dialog"
@@ -1282,22 +1394,24 @@ export default function App() {
                 <span className="eyebrow">Workspace action</span>
                 <h2 id="delete-dialog-title">Delete {selected.name}?</h2>
               </div>
-              <button type="button" onClick={() => setShowDeleteConfirm(false)} aria-label="Close confirmation">×</button>
+              <button type="button" onClick={() => setShowDeleteConfirm(false)} disabled={busy} aria-label="Close confirmation">×</button>
             </div>
             <p id="delete-dialog-description">
               The Agent will be removed from this workspace and its folder will be archived.
             </p>
+            {deleteError && <div className="field-error" role="alert">{deleteError}</div>}
             <div className="modal-footer">
               <button
                 type="button"
                 className="button button-ghost"
                 autoFocus
                 onClick={() => setShowDeleteConfirm(false)}
+                disabled={busy}
               >
                 Keep Agent
               </button>
-              <button type="button" className="button button-danger" onClick={deleteAgent}>
-                Delete Agent
+              <button type="button" className="button button-danger" onClick={deleteAgent} disabled={busy}>
+                {busy ? <><Spinner /> Deleting…</> : "Delete Agent"}
               </button>
             </div>
           </section>
@@ -1305,28 +1419,45 @@ export default function App() {
       )}
 
       {showCreate && (
-        <div className="modal-backdrop" onMouseDown={() => setShowCreate(false)}>
+        <div
+          className="modal-backdrop"
+          onMouseDown={() => {
+            if (!busy) setShowCreate(false);
+          }}
+        >
           <form
             className="modal"
             onSubmit={createAgent}
             onMouseDown={(event) => event.stopPropagation()}
             noValidate
+            role="dialog"
+            aria-modal="true"
+            ref={createDialog}
+            aria-labelledby="create-agent-title"
+            aria-describedby="create-agent-description"
           >
             <div className="modal-heading">
               <div>
                 <span className="eyebrow">New workspace</span>
-                <h2>Create an Agent</h2>
-                <p>Each Agent gets a persistent folder and a resumable Codex session.</p>
+                <h2 id="create-agent-title">Create an Agent</h2>
+                <p id="create-agent-description">Each Agent gets a persistent folder and a resumable Codex session.</p>
               </div>
-              <button type="button" onClick={() => setShowCreate(false)}>×</button>
+              <button type="button" onClick={() => setShowCreate(false)} disabled={busy} aria-label="Close create Agent dialog">×</button>
             </div>
+            {formError && <div className="field-error" id="create-agent-error" role="alert">{formError}</div>}
             <label>
               Name
               <input
+                ref={createNameInput}
                 autoFocus
                 placeholder="Frontend Builder"
                 value={form.name}
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                aria-invalid={Boolean(formError)}
+                aria-describedby={formError ? "create-agent-error" : undefined}
+                onChange={(event) => {
+                  setFormError(null);
+                  setForm({ ...form, name: event.target.value });
+                }}
                 required
                 maxLength={80}
               />
@@ -1336,9 +1467,10 @@ export default function App() {
               <input
                 placeholder="Builds polished React prototypes"
                 value={form.description}
-                onChange={(event) =>
-                  setForm({ ...form, description: event.target.value })
-                }
+                onChange={(event) => {
+                  setFormError(null);
+                  setForm({ ...form, description: event.target.value });
+                }}
                 maxLength={500}
               />
             </label>
@@ -1346,12 +1478,13 @@ export default function App() {
               Demo owner
               <select
                 value={form.ownerPrincipal}
-                onChange={(event) =>
+                onChange={(event) => {
+                  setFormError(null);
                   setForm({
                     ...form,
                     ownerPrincipal: event.target.value as "user-a" | "user-b",
-                  })
-                }
+                  });
+                }}
               >
                 <option value="user-a">User A · demo data</option>
                 <option value="user-b">User B · demo data</option>
@@ -1360,12 +1493,13 @@ export default function App() {
             </label>
             <label>
               Instructions
-                  <textarea
-                    className="resize-none"
+              <textarea
+                className="resize-none"
                 value={form.instructions}
-                onChange={(event) =>
-                  setForm({ ...form, instructions: event.target.value })
-                }
+                onChange={(event) => {
+                  setFormError(null);
+                  setForm({ ...form, instructions: event.target.value });
+                }}
                 rows={6}
                 maxLength={10_000}
               />
@@ -1378,7 +1512,7 @@ export default function App() {
               >
                 Cancel
               </button>
-              <button className="button button-primary" disabled={busy}>
+              <button type="submit" className="button button-primary" disabled={busy}>
                 {busy ? <Spinner /> : "Create Agent"}
               </button>
             </div>

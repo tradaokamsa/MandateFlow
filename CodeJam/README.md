@@ -137,6 +137,20 @@ workflow** explicitly creates a fresh mandate. Starting that workflow clears the
 old thread association and creates a fresh policy context; old references fail
 under the new capability.
 
+During a Run, the **Runtime activity** rail is the progress surface. It reports
+queued, authorization, Runtime/tool work, finalization, terminal, and failure
+states with timestamps. A stale active Run offers **Stop run** instead of
+leaving the user with an indefinite spinner. The fixture profile is intentionally
+proof-only: it verifies the MandateFlow path but does not provide a general
+coding Agent. The live `container` profile is required for Codex-backed coding.
+
+Form and recovery behavior is deliberately visible: access-token errors stay
+next to the field, Create/Edit errors keep the form open, native owner selection
+remains a normal browser select, and receipt **Details** expands in the page
+flow. Only the conversation transcript owns a bounded scroll region. Revoke and
+Delete confirmations remain open while a mutation is pending and show a
+recoverable error in the same dialog when a request fails.
+
 ### 5. User flows for the demo
 
 Use the completed Run's proof console and decision journal as the demo surface.
@@ -173,6 +187,22 @@ workspaces, conversations, and the MandateFlow SQLite journal.
 - Custom location: set `LOCAL_POC_DATA_ROOT`
 
 Run the same `npm run poc` command to continue later.
+
+If port `3000` is already in use, choose another loopback port and open that
+address in the browser:
+
+```bash
+PORT=3100 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run poc
+open http://127.0.0.1:3100
+```
+
+For a terminal-only check against that running instance:
+
+```bash
+MANDATEFLOW_E2E_BASE_URL=http://127.0.0.1:3100 \
+APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
+npm run check:mandateflow:e2e
+```
 
 ### Select a specific container engine
 

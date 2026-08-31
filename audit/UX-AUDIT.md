@@ -108,3 +108,51 @@ context while the new policy context starts cleanly.
   shared Brave desktop changed focus to a Google Meet window during capture; it
   was rejected and kept outside this audit folder. All screenshots above were
   recaptured, inspected, and accepted from the local app states.
+
+## 2026-08-31 wrap-up audit
+
+This follow-up was run against the current production bundle at
+`http://127.0.0.1:3100` in Brave with the deterministic fixture Runtime. The
+browser was at 125% zoom. The purpose of this pass was to close the reported
+stalled-proof, revoke-dead-end, token-field, and clunky-layout issues; it was
+not an exploratory audit.
+
+### Flow ledger
+
+| Flow | Result | Evidence / verification |
+| --- | --- | --- |
+| Empty unlock | PASS | Disabled submit and clear focus state; [15-auth-fixed-empty.png](evidence/15-auth-fixed-empty.png) |
+| Invalid access token | PASS | Inline error is readable and the Show button no longer overlaps the field; [16-auth-error-fixed.png](evidence/16-auth-error-fixed.png) |
+| Valid unlock | PASS | Fixture workspace opened with MandateFlow readiness and proof controls; [17-workspace-fixed.png](evidence/17-workspace-fixed.png) |
+| Create Agent modal | PASS | Clear form geometry, native owner select, visible labels, and modal semantics; [18-create-modal-fixed.png](evidence/18-create-modal-fixed.png) |
+| Empty Create submission | PASS | Inline name validation keeps the modal open and returns focus to the field; [19-create-error-fixed.png](evidence/19-create-error-fixed.png) |
+| Owner dropdown | PASS | Browser-owned select opened with the two bounded demo principals and remains keyboard accessible. |
+| Settings open after Create | FIXED | A shared-form state leak was reproduced in [20-settings-open.png](evidence/20-settings-open.png); the final source repopulates settings from the selected Agent before opening and the final build passed. |
+| Proof Run and evidence | PASS | Completed proof shows the persisted activity rail, proof rows, counters, and decision receipts in [17-workspace-fixed.png](evidence/17-workspace-fixed.png). |
+| Receipt disclosure | PASS | Each receipt exposes a visible Details/Hide affordance with `aria-expanded`, and the component test covers both states. |
+| Revoke confirmation | PASS | Confirmation explains Runtime cancellation and evidence retention; the mutation dialog stays open while pending and reports failure inline. |
+| Delete confirmation | PASS | Confirmation is explicit, remains open while pending, and reports failure inline; no destructive mutation was repeated during the wrap-up pass. |
+
+### Changes closed in this pass
+
+- Fixed the access-token input/button overlap and gave the auth form stable
+  labels, focus, and inline error geometry.
+- Added client-side form validation and kept Create/Edit, Revoke, and Delete
+  dialogs actionable while requests are pending or fail.
+- Fixed production validation responses so malformed requests return a useful
+  structured `400` instead of Fastify's generic `500` page.
+- Fixed the Settings form state leak that made Name and Description appear
+  blank after opening Settings following Create/Cancel.
+- Made proof context, activity, receipts, and disclosures expand in normal
+  document flow. The conversation transcript is the only intentionally bounded
+  scroll owner.
+- Added a visible receipt disclosure affordance and friendlier request-failure
+  copy, while preserving the existing design tokens and native select contract.
+
+### Scope note
+
+No GitHub issue was opened: the reported defects were reproduced and closed in
+the scoped fixture flow, and the final application, Go, end-to-end, and strict
+UI checks passed. Live Groq/container behavior and a separate mobile screenshot
+matrix remain deployment/test profiles rather than unresolved defects; they are
+documented here so they are not mistaken for proof-only fixture behavior.

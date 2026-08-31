@@ -151,6 +151,10 @@ workspaces and the redacted journal remain on disk.
 For the exact acceptance walkthrough, see
 [CodeJam/docs/DEMO.md](CodeJam/docs/DEMO.md).
 
+For the local operator SOP, progress/recovery behavior, and troubleshooting,
+see [CodeJam/README.md](CodeJam/README.md). The completed browser audit and
+captured evidence are recorded in [audit/UX-AUDIT.md](audit/UX-AUDIT.md).
+
 ## What problem is solved?
 
 An Agent may legitimately need several tools in one workflow, but a tool

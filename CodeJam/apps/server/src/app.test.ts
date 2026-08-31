@@ -62,4 +62,30 @@ describe("HTTP boundary", () => {
     });
     expect(oversized.statusCode).toBe(413);
   });
+
+  it("returns structured validation errors in the production app", async () => {
+    const app = await createApp(
+      loadConfig({
+        NODE_ENV: "production",
+        HOST: "127.0.0.1",
+        APP_AUTH_TOKEN: "a-secure-local-test-token",
+      }),
+      service,
+    );
+    apps.push(app);
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/agents",
+      headers: {
+        authorization: "Bearer a-secure-local-test-token",
+        "content-type": "application/json",
+      },
+      payload: {},
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({
+      error: "Request validation failed",
+      details: [{ path: ["name"] }],
+    });
+  });
 });

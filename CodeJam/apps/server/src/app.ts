@@ -67,6 +67,37 @@ export async function createApp(
     }
   });
 
+  // Register the root handler before plugins create encapsulated contexts. In
+  // production the static plugin is registered below, and errors from a route
+  // can otherwise fall back to Fastify's generic 500 response.
+  app.setErrorHandler((error, request, reply) => {
+    const appError = error instanceof Error ? error : new Error(String(error));
+    const isZodError =
+      error instanceof z.ZodError ||
+      (error instanceof Error && error.name === "ZodError");
+    const issues = (error as { issues?: unknown }).issues;
+    const validationDetails = isZodError && Array.isArray(issues) ? issues : null;
+    const frameworkStatus =
+      typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : null;
+    const statusCode =
+      error instanceof HttpError
+        ? error.statusCode
+        : isZodError
+          ? 400
+          : frameworkStatus && frameworkStatus >= 400 && frameworkStatus <= 599
+            ? frameworkStatus
+            : 500;
+    if (statusCode >= 500) {
+      request.log.error(appError);
+    }
+    return reply.code(statusCode).send({
+      error: validationDetails ? "Request validation failed" : appError.message,
+      ...(validationDetails ? { details: validationDetails } : {}),
+    });
+  });
+
   app.get("/api/health", async () => ({
     ok: true,
     service: "volc-agent-launchpad",
@@ -171,30 +202,6 @@ export async function createApp(
       return reply.sendFile("index.html");
     });
   }
-
-  app.setErrorHandler((error, request, reply) => {
-    const appError = error instanceof Error ? error : new Error(String(error));
-    const validationError = error instanceof z.ZodError;
-    const frameworkStatus =
-      typeof (error as { statusCode?: unknown }).statusCode === "number"
-        ? (error as { statusCode: number }).statusCode
-        : null;
-    const statusCode =
-      error instanceof HttpError
-        ? error.statusCode
-        : validationError
-          ? 400
-          : frameworkStatus && frameworkStatus >= 400 && frameworkStatus <= 599
-            ? frameworkStatus
-            : 500;
-    if (statusCode >= 500) {
-      request.log.error(appError);
-    }
-    return reply.code(statusCode).send({
-      error: appError.message,
-      ...(validationError ? { details: error.issues } : {}),
-    });
-  });
 
   return app;
 }
