@@ -14,6 +14,10 @@ coverage/
 !.env.example
 !.env.*.example
 groq.api.txt
+api_key.txt
+
+# Local Codex task metadata
+.codex/
 
 # Local application state
 .data/

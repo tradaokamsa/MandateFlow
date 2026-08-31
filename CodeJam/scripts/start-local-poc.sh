@@ -259,11 +259,11 @@ export MANDATEFLOW_ENABLED=true
 export MANDATEFLOW_CONTROL_URL="http://127.0.0.1:$mandateflow_control_port"
 export MANDATEFLOW_CONTROL_HOST_PORT="$mandateflow_control_port"
 
-mcp_publish_args=()
+sidecar_publish_args=(--publish "127.0.0.1:$mandateflow_control_port:3002")
 if [[ "$runtime_provider" == "fixture" ]]; then
   runtime_mcp_host_port="${MANDATEFLOW_RUNTIME_MCP_HOST_PORT:-3001}"
   export MANDATEFLOW_RUNTIME_MCP_URL="http://127.0.0.1:$runtime_mcp_host_port/mcp"
-  mcp_publish_args=(--publish "127.0.0.1:$runtime_mcp_host_port:3001")
+  sidecar_publish_args+=(--publish "127.0.0.1:$runtime_mcp_host_port:3001")
 else
   export MANDATEFLOW_RUNTIME_MCP_URL="http://mandateflow-gateway:3001/mcp"
 fi
@@ -280,8 +280,7 @@ log "Starting the Go MandateFlow sidecar."
   --label "io.codejam.instance-id=$RUNTIME_INSTANCE_ID" \
   --network "$MANDATEFLOW_CONTAINER_NETWORK" \
   --network-alias mandateflow-gateway \
-  --publish "127.0.0.1:$mandateflow_control_port:3002" \
-  "${mcp_publish_args[@]}" \
+  "${sidecar_publish_args[@]}" \
   "${sidecar_user_args[@]}" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
