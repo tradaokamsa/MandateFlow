@@ -1,9 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { migrateRuntimeSessionEvent } from "./runtime-session.js";
 import type { Agent, AgentRun, Database, DemoOwnerPrincipal } from "./types.js";
 
 const emptyDatabase = (): Database => ({
-  version: 3,
+  version: 4,
   agents: [],
   messages: [],
   runs: [],
@@ -26,19 +27,19 @@ export class JsonStore {
         runs?: unknown;
       };
       if (
-        ![1, 2, 3].includes(parsed.version as number) ||
+        ![1, 2, 3, 4].includes(parsed.version as number) ||
         !Array.isArray(parsed.agents) ||
         !Array.isArray(parsed.messages) ||
         !Array.isArray(parsed.runs)
       ) {
         throw new Error("Unsupported database format");
       }
-      this.data = migrateDatabase(parsed.version as 1 | 2 | 3, {
+      this.data = migrateDatabase(parsed.version as 1 | 2 | 3 | 4, {
         agents: parsed.agents as unknown[],
         messages: parsed.messages as unknown[],
         runs: parsed.runs as unknown[],
       });
-      if (parsed.version !== 3) await this.persist(this.data);
+      if (parsed.version !== 4) await this.persist(this.data);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -75,7 +76,7 @@ export class JsonStore {
 }
 
 function migrateDatabase(
-  version: 1 | 2 | 3,
+  version: 1 | 2 | 3 | 4,
   legacy: { agents: unknown[]; messages: unknown[]; runs: unknown[] },
 ): Database {
   const agents = legacy.agents.map((value) => {
@@ -91,7 +92,7 @@ function migrateDatabase(
           ? agent.agentPrincipal
           : "agent:" + id,
       codexHomeVersion:
-        version === 3 && typeof agent.codexHomeVersion === "number"
+        version >= 3 && typeof agent.codexHomeVersion === "number"
           ? agent.codexHomeVersion
           : 0,
       activePolicyContextId:
@@ -101,7 +102,15 @@ function migrateDatabase(
   const runs = legacy.runs.map((value) => ({
     ...(value as AgentRun),
     progress: Array.isArray((value as Partial<AgentRun>).progress)
-      ? (value as AgentRun).progress
+      ? (value as AgentRun).progress.map((event, index) => {
+          const candidateRunId = (value as Partial<AgentRun>).id;
+          const runId = typeof candidateRunId === "string" ? candidateRunId : "legacy-run";
+          return migrateRuntimeSessionEvent(
+            runId,
+            event,
+            index,
+          );
+        })
       : [],
     mandateId:
       typeof (value as Partial<AgentRun>).mandateId === "string"
@@ -117,7 +126,7 @@ function migrateDatabase(
         : null,
   }));
   return {
-    version: 3,
+    version: 4,
     agents: agents as Agent[],
     messages: legacy.messages as Database["messages"],
     runs: runs.map((run) => ({

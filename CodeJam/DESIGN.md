@@ -65,11 +65,13 @@ credential and distinguish it from optional model defaults.
 When the deterministic fixture profile is active, a warm inline notice labels
 the workspace as proof-only and points coding work to the Codex-backed Runtime.
 
-Run activity belongs directly beneath the proof action. It is a compact,
-timestamped activity rail: one current phase, recent safe summaries of Agent
-work, and a visible stop action while a Run is active. This is the primary
-feedback pattern for long-running or model-backed work; a spinner alone is not
-enough.
+Run activity belongs directly beneath the proof action and is repeated as a
+chronological session transcript in the conversation. The compact rail shows
+the current phase and recent safe summaries; the transcript expands typed
+planning, command, file, protected-tool, response, and terminal events with
+safe metadata. A transcript follows only while the user is near its bottom;
+otherwise the user gets an explicit jump action. This is the primary feedback
+pattern for long-running or model-backed work; a spinner alone is not enough.
 
 The Playground grows with mandate metadata and receipt details. The conversation
 transcript is the intentional bounded scroll region; evidence and disclosures

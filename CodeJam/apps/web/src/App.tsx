@@ -12,6 +12,11 @@ import type {
 } from "./types";
 import { ProofPanel } from "./ProofPanel";
 import { ReceiptCard } from "./ReceiptCard";
+import { RuntimeSessionTimeline } from "./RuntimeSessionTimeline";
+import {
+  isTranscriptNearBottom,
+  scrollTranscriptToLatest,
+} from "./runtime-session";
 
 const heroPrompt =
   "Run the MandateFlow verification workflow. First, list the open Support ticket, " +
@@ -131,7 +136,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [authInput, setAuthInput] = useState("");
-  const messageEnd = useRef<HTMLDivElement>(null);
+  const transcript = useRef<HTMLElement | null>(null);
+  const transcriptPinnedToBottom = useRef(true);
+  const forceTranscriptFollow = useRef(false);
+  const previousTranscriptKey = useRef<string | null>(null);
+  const [showNewActivity, setShowNewActivity] = useState(false);
   const createDialog = useRef<HTMLFormElement>(null);
   const createNameInput = useRef<HTMLInputElement>(null);
   const settingsNameInput = useRef<HTMLInputElement>(null);
@@ -152,6 +161,43 @@ export default function App() {
     () => agents.find((agent) => agent.id === selectedId) ?? null,
     [agents, selectedId],
   );
+
+  const latestProgress = activeRun?.progress.at(-1);
+  const transcriptKey = useMemo(
+    () => [
+      messages.map((message) => message.id).join(","),
+      activeRun?.id ?? "",
+      activeRun?.status ?? "",
+      latestProgress?.sequence ?? latestProgress?.id ?? "",
+    ].join(":"),
+    [activeRun?.id, activeRun?.status, latestProgress, messages],
+  );
+  const currentRunAssistant = useMemo(
+    () => activeRun
+      ? messages.find((message) => message.runId === activeRun.id && message.role === "assistant") ?? null
+      : null,
+    [activeRun, messages],
+  );
+  const transcriptMessages = currentRunAssistant
+    ? messages.filter((message) => message.id !== currentRunAssistant.id)
+    : messages;
+
+  const scrollLatestTranscript = useCallback(() => {
+    const element = transcript.current;
+    if (!element) return;
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    scrollTranscriptToLatest(element, prefersReducedMotion);
+    transcriptPinnedToBottom.current = true;
+    setShowNewActivity(false);
+  }, []);
+
+  const handleTranscriptScroll = useCallback(() => {
+    const element = transcript.current;
+    if (!element) return;
+    const pinned = isTranscriptNearBottom(element);
+    transcriptPinnedToBottom.current = pinned;
+    if (pinned) setShowNewActivity(false);
+  }, []);
 
   useEffect(() => {
     document.title = selected
@@ -277,8 +323,23 @@ export default function App() {
   }, [selected]);
 
   useEffect(() => {
-    messageEnd.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, activeRun]);
+    transcriptPinnedToBottom.current = true;
+    forceTranscriptFollow.current = true;
+    previousTranscriptKey.current = null;
+    setShowNewActivity(false);
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (previousTranscriptKey.current === transcriptKey) return;
+    previousTranscriptKey.current = transcriptKey;
+    const shouldFollow = transcriptPinnedToBottom.current || forceTranscriptFollow.current;
+    forceTranscriptFollow.current = false;
+    if (shouldFollow) {
+      window.requestAnimationFrame(scrollLatestTranscript);
+    } else {
+      setShowNewActivity(true);
+    }
+  }, [scrollLatestTranscript, transcriptKey]);
 
   useEffect(() => {
     if (!showCreate && !showRevokeConfirm && !showDeleteConfirm) return;
@@ -557,6 +618,7 @@ export default function App() {
     ) return;
     const agentId = selected.id;
     const normalizedContent = content.trim();
+    forceTranscriptFollow.current = true;
     setPrompt("");
     setError(null);
     setWorkflowNotice(null);
@@ -573,6 +635,7 @@ export default function App() {
       );
       await pollRun(result.run.id, agentId);
     } catch (reason) {
+      forceTranscriptFollow.current = false;
       setError(friendlyRequestError(reason, "The Run could not be started."));
       setActiveRun(null);
       await refreshAgents();
@@ -679,7 +742,6 @@ export default function App() {
   );
   const isFixtureRuntime = system?.runtimeProvider === "fixture";
   const visibleStarterPrompts = isFixtureRuntime ? starterPrompts.slice(0, 1) : starterPrompts;
-  const latestProgress = activeRun?.progress.at(-1);
 
   return (
     <div className="app-shell">
@@ -1101,7 +1163,21 @@ export default function App() {
                 </div>
               )}
 
-              <section className="messages" aria-label="Agent conversation">
+              <section
+                className="messages"
+                ref={transcript}
+                onScroll={handleTranscriptScroll}
+                aria-label="Agent conversation"
+              >
+                {showNewActivity && (
+                  <button
+                    type="button"
+                    className="transcript-jump"
+                    onClick={scrollLatestTranscript}
+                  >
+                    ↓ New Agent activity · Jump to latest
+                  </button>
+                )}
                 {messages.length === 0 && !activeRun ? (
                   <div className="welcome">
                     <div className="welcome-orbit">
@@ -1123,7 +1199,7 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  messages.map((message) => (
+                  transcriptMessages.map((message) => (
                     <article className={"message message-" + message.role} key={message.id}>
                       <div className="message-meta">
                         <strong>{message.role === "user" ? "You" : selected.name}</strong>
@@ -1139,6 +1215,22 @@ export default function App() {
                     </article>
                   ))
                 )}
+                {activeRun && (
+                  <section className="session-timeline-block" aria-labelledby="agent-session-title">
+                    <div className="session-timeline-heading">
+                      <div>
+                        <span className="eyebrow">Agent session</span>
+                        <strong id="agent-session-title">Chronological Runtime activity</strong>
+                      </div>
+                      <span>{activeRun.progress.length} events · safe summaries</span>
+                    </div>
+                    <RuntimeSessionTimeline
+                      run={activeRun}
+                      live={["queued", "running"].includes(activeRun.status)}
+                      ariaLabel="Chronological Agent session activity"
+                    />
+                  </section>
+                )}
                 {activeRun && ["queued", "running"].includes(activeRun.status) && (
                   <article className="message message-assistant thinking">
                     <div className="message-meta">
@@ -1148,7 +1240,7 @@ export default function App() {
                     <div className="thinking-row">
                       <Spinner />
                       <span>
-                        <strong>{latestProgress?.label ?? "Starting the Agent Runtime"}</strong>
+                        <strong>{latestProgress?.title ?? "Starting the Agent Runtime"}</strong>
                         <small>
                           {latestProgress?.detail ?? "Waiting for the secure Runtime to report its first event."}
                         </small>
@@ -1172,7 +1264,17 @@ export default function App() {
                     </button>
                   </article>
                 )}
-                <div ref={messageEnd} />
+                {currentRunAssistant && (
+                  <article className="message message-assistant" key={currentRunAssistant.id}>
+                    <div className="message-meta">
+                      <strong>{selected.name}</strong>
+                      <span>{formatTime(currentRunAssistant.createdAt)}</span>
+                    </div>
+                    <div className="message-body">
+                      <ReactMarkdown skipHtml>{currentRunAssistant.content}</ReactMarkdown>
+                    </div>
+                  </article>
+                )}
               </section>
 
               <form className="composer" onSubmit={sendMessage} noValidate>

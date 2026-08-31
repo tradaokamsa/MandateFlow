@@ -132,6 +132,64 @@ describe("Codex runner protocol", () => {
     expect(progress.join(" ")).not.toContain("secret.txt");
   });
 
+  it("classifies coding-session items and keeps metadata safe", () => {
+    const parsed = {
+      messages: [] as string[],
+      threadId: null as string | null,
+      usage: null,
+      errors: [] as string[],
+    };
+    const events: Array<Record<string, unknown>> = [];
+    const onProgress = (event: Record<string, unknown>) => events.push(event);
+
+    parseCodexEventLine(
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          type: "file_change",
+          changes: [
+            { path: "/workspace/src/weather.ts", kind: "update" },
+            { path: "/workspace/.env", kind: "update" },
+          ],
+          duration_ms: 125,
+        },
+      }),
+      parsed,
+      onProgress,
+    );
+    parseCodexEventLine(
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "mcp_tool_call", tool: "crm.resolve_customer" },
+      }),
+      parsed,
+      onProgress,
+    );
+    parseCodexEventLine(JSON.stringify({ type: "item.delta", delta: "safe preview" }), parsed, onProgress);
+
+    expect(events[0]).toMatchObject({
+      kind: "file_change",
+      state: "completed",
+      title: "Updating workspace files complete",
+      safeMetadata: {
+        paths: ["src/weather.ts"],
+        durationMs: 125,
+      },
+    });
+    expect(events[1]).toMatchObject({
+      kind: "mcp",
+      state: "completed",
+      safeMetadata: { tool: "crm.resolve_customer" },
+    });
+    expect(events[2]).toMatchObject({
+      kind: "assistant",
+      state: "streaming",
+      title: "Agent response streaming",
+    });
+    expect(JSON.stringify(events)).not.toContain(".env");
+    expect(JSON.stringify(events)).not.toContain("safe preview");
+  });
+
   it("redacts Run authority and opaque protected references from captured output", () => {
     const capability = "mfr1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const reference = "ref1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
