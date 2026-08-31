@@ -9,6 +9,10 @@ import {
 } from "./mandateflow-client.js";
 import { JsonStore } from "./store.js";
 import { createRuntimeSessionEvent, sanitizeSafeMetadata } from "./runtime-session.js";
+import {
+  isMandateFlowProofPrompt,
+  validateMandateFlowProof,
+} from "./proof-validation.js";
 import { redactRuntimeText } from "./trace.js";
 import type {
   Agent,
@@ -37,6 +41,15 @@ const RETRY_PROMPT =
   "the receipt ID.";
 
 class SecurityFinalizationError extends Error {}
+
+class IncompleteProofError extends Error {
+  constructor(missing: string[]) {
+    super(
+      "MandateFlow proof is incomplete; missing gateway evidence: " +
+        missing.join(", "),
+    );
+  }
+}
 
 const MAX_RUN_PROGRESS_EVENTS = 80;
 const CANCELLATION_WAIT_MS = 8_000;
@@ -660,6 +673,14 @@ export class AgentService {
 
       if (this.cancellationRequests.has(run.id)) throw new RunCancelledError();
 
+      if (this.config.mandateFlowEnabled && this.mandateFlow && isMandateFlowProofPrompt(run.prompt)) {
+        const evidence = await this.mandateFlow.evidence(run.id);
+        const validation = validateMandateFlowProof(evidence);
+        if (!validation.complete) {
+          throw new IncompleteProofError(validation.missing);
+        }
+      }
+
       if (this.config.mandateFlowEnabled && this.mandateFlow) {
         await this.queueRunProgress(run.id, {
           stage: "phase",
@@ -726,6 +747,16 @@ export class AgentService {
         error instanceof Error ? error.message : String(error),
         this.config.groqApiKey,
       );
+      if (error instanceof IncompleteProofError) {
+        await this.queueRunProgress(run.id, {
+          stage: "error",
+          kind: "error",
+          state: "failed",
+          title: "Proof evidence incomplete",
+          label: "Proof evidence incomplete",
+          detail: message,
+        });
+      }
       if (mandatePrepared && !mandateTerminal && !securityFinalizationPending) {
         try {
           await this.finishMandate(run.id, cancelled ? "CANCELLED" : "FAILED");

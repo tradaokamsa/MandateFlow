@@ -158,9 +158,12 @@ typed fixture before a protected operation runs.
 The proof console and decision journal should show Support → Case → CRM as
 `ALLOW`, Payment → Case → CRM as `FLOW_DENIED` with rule
 `NO_PAYMENT_REIDENTIFICATION`, the denied CRM counter unchanged, aggregate
-recovery, and a fresh Support recovery. Use **Retry denied call** to prove that a
-new Runtime and capability cannot erase the Payment lineage. Expand a receipt
-to inspect the redacted decision and follow its causal parent links.
+recovery, and a fresh Support recovery. The control plane validates those
+receipts before accepting a live proof as completed; a model summary cannot
+claim a step that the Go gateway did not record. Use **Retry denied call** to
+prove that a new Runtime and capability cannot erase the Payment lineage.
+Expand a receipt to inspect the redacted decision and follow its causal parent
+links.
 
 The selected Playground also shows a server-derived Mandate Summary. **Revoke
 mandate** first commits the root mandate's `REVOKED` state in the Go sidecar,

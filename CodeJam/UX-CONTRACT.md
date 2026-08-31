@@ -40,7 +40,7 @@
 | CRUD | `AgentService` and existing Playground controls | `apps/server/src/agent-service.ts` | return / stay | full-flow tests |
 | Destructive confirmation | App-owned modal dialog | `apps/web/src/App.tsx` | revoke / delete | keyboard + failure-path tests |
 | Status feedback | Inline `role=status` and `role=alert` regions | `apps/web/src/App.tsx` | success / warning / error | DOM-level test |
-| Proof console | `ProofPanel` plus pure receipt derivation | `apps/web/src/ProofPanel.tsx`, `proof.ts` | pending / verified | receipt-backed state tests |
+| Proof console | `ProofPanel` plus pure receipt derivation and server-side proof validation | `apps/web/src/ProofPanel.tsx`, `proof.ts`, `apps/server/src/proof-validation.ts` | pending / verified / not recorded | receipt-backed state tests |
 | Run activity | `RuntimeSessionTimeline` plus the `ProofPanel` summary rail backed by `AgentRun.progress` | `apps/server/src/types.ts`, `apps/server/src/runtime-session.ts`, runner event parsing | queued / active / terminal | typed event persistence + stale-state recovery |
 | Receipt detail | Native `details` disclosure | `apps/web/src/ReceiptCard.tsx` | compact / expanded / missing parent | redaction + causal-link tests |
 
@@ -111,6 +111,11 @@
 - Proof claims are derived only from API receipts: the policy rule, CRM counter,
   downstream invocation state, context continuity, and causal parents are shown
   as pending when evidence is absent rather than inferred from prompt text.
+- A fixed MandateFlow proof Run must contain the ordered Support, Payment-denial,
+  aggregate-recovery, and fresh Support receipt graph before the service can
+  close it as successful. If the Agent exits with an incomplete graph, the Run
+  fails closed, the unsupported assistant claim is not persisted, and missing
+  proof rows are labeled `Not recorded` rather than implying active work.
 
 ## Verification
 
