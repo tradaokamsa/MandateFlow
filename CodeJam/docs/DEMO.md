@@ -12,6 +12,13 @@ export GROQ_MODEL='openai/gpt-oss-120b'
 npm run poc
 ```
 
+> **Test this on your own key before the live demo.** On a free/on-demand
+> Groq tier, `gpt-oss-120b` can return `413 Request too large` (a single
+> Codex turn needs ~9,100 tokens, above that tier's 8,000 TPM cap) —
+> `gpt-oss-20b` fit under that specific cap in our testing. This is a
+> per-account rate limit, not a code defect, so a higher tier or different
+> key may not hit it.
+
 The startup log must say `Runtime provider: container`. This is the path that
 demonstrates the real Codex Agent through Groq. If the key is stored as a raw
 value in `../api_key.txt`, load it without printing it:
@@ -44,6 +51,15 @@ with the same Case tool, and attempt the same CRM resolution. If policy denies i
 use payments.aggregate_failures, then fetch a fresh Support ticket, transform it,
 and resolve it through CRM. Report policy outcomes, not protected identifiers.
 ```
+
+> This prompt calls five protected tools in one turn. In one test run this
+> tripped `output_parse_failed` on `gpt-oss-20b` via the live `container`
+> Runtime — consistent with community reports of `tool_use_failed` on long
+> tool chains for Groq's gpt-oss models, though it was only reproduced once
+> and may be model/tier/account dependent. If it happens on your key,
+> `RUNTIME_PROVIDER=fixture` drives the identical Go Gateway/SQLite path
+> deterministically and is the fallback for judging if the live model path
+> is flaky on the day.
 
 While a Run is active, the proof console shows a timestamped **Runtime
 activity** timeline for secure preparation, Agent work, protected-tool checks,
