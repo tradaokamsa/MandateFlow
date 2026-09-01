@@ -141,7 +141,7 @@ describe("Agent lifecycle", () => {
     expect(system).not.toHaveProperty("arkConfigured");
   });
 
-  it("runs the credential-free fixture provider without requiring Groq", async () => {
+  it("runs the deterministic fixture provider", async () => {
     const service = await makeService(new FakeRunner(), null, {
       RUNTIME_PROVIDER: "fixture",
       GROQ_API_KEY: "",

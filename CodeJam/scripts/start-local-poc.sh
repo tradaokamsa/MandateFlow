@@ -4,13 +4,9 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 
-# --- Demo-quiet handling: silence docker/npm vomit unless --verbose ---
-POC_QUIET="${POC_QUIET:-0}"
-POC_VERBOSE="${POC_VERBOSE:-${VERBOSE:-0}}"
+# Keep help available even before the first local .env file has been created.
 for _arg in "$@"; do
   case "$_arg" in
-    --verbose|-v) POC_VERBOSE=1; POC_QUIET=0 ;;
-    --quiet|-q) POC_QUIET=1; POC_VERBOSE=0 ;;
     --help|-h)
       printf 'Usage: %s [--verbose|-v] [--quiet|-q] [--help]\n' "$(basename "$0")" >&2
       printf '  --verbose  Show full docker/npm build logs (for debugging)\n' >&2
@@ -18,6 +14,66 @@ for _arg in "$@"; do
       printf '\nOne-click demo: make demo  (or ./CodeJam/scripts/start-local-poc.sh)\n' >&2
       exit 0
       ;;
+  esac
+done
+
+# The local demo has one explicit configuration entry point. Preserve values
+# supplied by Makefile/shell callers because they are intentional run-specific
+# overrides (for example PORT and RUNTIME_INSTANCE_ID).
+_caller_port_set="${PORT+x}"
+_caller_port="${PORT-}"
+_caller_control_port_set="${MANDATEFLOW_CONTROL_HOST_PORT+x}"
+_caller_control_port="${MANDATEFLOW_CONTROL_HOST_PORT-}"
+_caller_runtime_mcp_port_set="${MANDATEFLOW_RUNTIME_MCP_HOST_PORT+x}"
+_caller_runtime_mcp_port="${MANDATEFLOW_RUNTIME_MCP_HOST_PORT-}"
+_caller_instance_id_set="${RUNTIME_INSTANCE_ID+x}"
+_caller_instance_id="${RUNTIME_INSTANCE_ID-}"
+_caller_data_root_set="${LOCAL_POC_DATA_ROOT+x}"
+_caller_data_root="${LOCAL_POC_DATA_ROOT-}"
+_caller_provider_set="${RUNTIME_PROVIDER+x}"
+_caller_provider="${RUNTIME_PROVIDER-}"
+_caller_engine_set="${CONTAINER_ENGINE+x}"
+_caller_engine="${CONTAINER_ENGINE-}"
+_caller_auth_token_set="${APP_AUTH_TOKEN+x}"
+_caller_auth_token="${APP_AUTH_TOKEN-}"
+_caller_groq_key_set="${GROQ_API_KEY+x}"
+_caller_groq_key="${GROQ_API_KEY-}"
+_caller_groq_model_set="${GROQ_MODEL+x}"
+_caller_groq_model="${GROQ_MODEL-}"
+
+env_file="${LAUNCHPAD_ENV_FILE:-$repo_dir/.env}"
+if [[ "$env_file" != /* ]]; then
+  env_file="$repo_dir/$env_file"
+fi
+if [[ ! -f "$env_file" ]]; then
+  printf '[local-poc] Missing environment file: %s\n' "$env_file" >&2
+  printf '[local-poc] Create it with: cp .env.example .env\n' >&2
+  printf '[local-poc] Then set GROQ_API_KEY to your free Groq API key.\n' >&2
+  exit 2
+fi
+set -a
+# shellcheck disable=SC1090
+source "$env_file"
+set +a
+
+if [[ -n "$_caller_port_set" ]]; then PORT="$_caller_port"; export PORT; fi
+if [[ -n "$_caller_control_port_set" ]]; then MANDATEFLOW_CONTROL_HOST_PORT="$_caller_control_port"; export MANDATEFLOW_CONTROL_HOST_PORT; fi
+if [[ -n "$_caller_runtime_mcp_port_set" ]]; then MANDATEFLOW_RUNTIME_MCP_HOST_PORT="$_caller_runtime_mcp_port"; export MANDATEFLOW_RUNTIME_MCP_HOST_PORT; fi
+if [[ -n "$_caller_instance_id_set" ]]; then RUNTIME_INSTANCE_ID="$_caller_instance_id"; export RUNTIME_INSTANCE_ID; fi
+if [[ -n "$_caller_data_root_set" ]]; then LOCAL_POC_DATA_ROOT="$_caller_data_root"; export LOCAL_POC_DATA_ROOT; fi
+if [[ -n "$_caller_provider_set" ]]; then RUNTIME_PROVIDER="$_caller_provider"; export RUNTIME_PROVIDER; fi
+if [[ -n "$_caller_engine_set" ]]; then CONTAINER_ENGINE="$_caller_engine"; export CONTAINER_ENGINE; fi
+if [[ -n "$_caller_auth_token_set" ]]; then APP_AUTH_TOKEN="$_caller_auth_token"; export APP_AUTH_TOKEN; fi
+if [[ -n "$_caller_groq_key_set" ]]; then GROQ_API_KEY="$_caller_groq_key"; export GROQ_API_KEY; fi
+if [[ -n "$_caller_groq_model_set" ]]; then GROQ_MODEL="$_caller_groq_model"; export GROQ_MODEL; fi
+
+# --- Demo-quiet handling: silence docker/npm vomit unless --verbose ---
+POC_QUIET="${POC_QUIET:-0}"
+POC_VERBOSE="${POC_VERBOSE:-${VERBOSE:-0}}"
+for _arg in "$@"; do
+  case "$_arg" in
+    --verbose|-v) POC_VERBOSE=1; POC_QUIET=0 ;;
+    --quiet|-q) POC_QUIET=1; POC_VERBOSE=0 ;;
   esac
 done
 export POC_QUIET POC_VERBOSE
@@ -46,27 +102,7 @@ _poc_run() {
   fi
 }
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
-
-# --- One-click demo niceties (so `make demo` / direct `npm run poc` works without manual exports) ---
-# Auto-load Groq key from repo-root api_key.txt if not already exported (matches ./run-poc.sh behavior)
-if [[ -z "${GROQ_API_KEY:-}" ]]; then
-  for _key_file in "$repo_dir/../api_key.txt" "$repo_dir/api_key.txt"; do
-    if [[ -f "$_key_file" ]]; then
-      _loaded_key="$(tr -d '\r' < "$_key_file" 2>/dev/null | xargs 2>/dev/null || true)"
-      if [[ -n "${_loaded_key:-}" && "${_loaded_key}" != replace-* ]]; then
-        GROQ_API_KEY="$_loaded_key"
-        export GROQ_API_KEY
-        break
-      fi
-    fi
-  done
-fi
+# --- One-click demo niceties (so `make demo` / direct `npm run poc` works after .env setup) ---
 # Auto-generate unlock token if not provided (one-click demo). Mirrors run-poc.sh.
 if [[ -z "${APP_AUTH_TOKEN:-}" || ${#APP_AUTH_TOKEN} -lt 24 || "$APP_AUTH_TOKEN" == replace-* || ! "$APP_AUTH_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
   if command -v node >/dev/null 2>&1; then
@@ -98,6 +134,11 @@ groq_key_is_usable() {
   local key="${GROQ_API_KEY:-}"
   [[ -n "$key" ]] && [[ ! "$key" =~ ^(replace|your|placeholder|change|xxx+)([-_[:space:]]|$) ]]
 }
+if ! groq_key_is_usable; then
+  printf '[local-poc] GROQ_API_KEY is missing or still a placeholder in %s.\n' "$env_file" >&2
+  printf '[local-poc] Copy .env.example to .env and set it to your free Groq API key.\n' >&2
+  exit 2
+fi
 if [[ -z "$runtime_provider" || "$runtime_provider" == "local-process" ]]; then
   if groq_key_is_usable; then
     runtime_provider="container"
@@ -197,12 +238,6 @@ detect_engine() {
   log_err "Install one of them, start it, and rerun this command."
   return 1
 }
-
-if [[ "$runtime_provider" == "container" ]] && ! groq_key_is_usable; then
-  log_err "GROQ_API_KEY is required. GROQ_MODEL is optional."
-  log_err "Use RUNTIME_PROVIDER=fixture for the credential-free deterministic proof."
-  exit 2
-fi
 
 app_auth_token="${APP_AUTH_TOKEN:-}"
 if [[ ${#app_auth_token} -lt 24 || "$app_auth_token" == replace-* || ! "$app_auth_token" =~ ^[A-Za-z0-9._~-]+$ ]]; then

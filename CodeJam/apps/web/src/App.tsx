@@ -837,7 +837,7 @@ export default function App() {
               <strong>Runtime configuration needed</strong>
               <p>
                 {system?.runtimeProvider !== "fixture" && !system?.groqConfigured
-                  ? "Set GROQ_API_KEY in .env before using the Playground; GROQ_MODEL is optional."
+                  ? "Set GROQ_API_KEY in CodeJam/.env before using the Playground; GROQ_MODEL is optional."
                   : system?.mandateFlowEnabled && !system.mandateFlowReady
                     ? "The Go MandateFlow sidecar is unavailable. Secure Runs fail closed until it is ready."
                   : system.runtimeProvider === "container"
@@ -1020,7 +1020,7 @@ export default function App() {
               {isFixtureRuntime && (
                 <div className="fixture-notice" role="status">
                   <strong>Proof-only mode</strong>
-                  <span>This credential-free profile runs the deterministic MandateFlow proof. Connect a Codex Runtime to build code with an Agent.</span>
+                  <span>This deterministic proof profile runs the MandateFlow workflow. Connect a Codex Runtime to build code with an Agent.</span>
                 </div>
               )}
 

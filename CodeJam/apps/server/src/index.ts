@@ -1,13 +1,20 @@
 import path from "node:path";
 import { AgentService } from "./agent-service.js";
 import { createApp } from "./app.js";
-import { loadConfig, writeCodexConfig } from "./config.js";
+import { isGroqConfigured, loadConfig, writeCodexConfig } from "./config.js";
+import { loadApplicationEnv } from "./env.js";
 import { MandateFlowClient } from "./mandateflow-client.js";
 import { createRunner } from "./runner-factory.js";
 import { JsonStore } from "./store.js";
 import { WorkspaceManager } from "./workspace.js";
 
+loadApplicationEnv();
 const config = loadConfig();
+if (config.runtimeProvider !== "fixture" && !isGroqConfigured(config)) {
+  throw new Error(
+    "GROQ_API_KEY is missing or still a placeholder. Set it in CodeJam/.env, copied from CodeJam/.env.example.",
+  );
+}
 await writeCodexConfig(config);
 
 const store = new JsonStore(path.join(config.dataDirectory, "launchpad.json"));

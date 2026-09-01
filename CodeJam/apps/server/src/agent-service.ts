@@ -459,13 +459,13 @@ export class AgentService {
     if (this.config.runtimeProvider !== "fixture" && !isGroqConfigured(this.config)) {
       throw new HttpError(
         503,
-        "Groq is not configured. Set GROQ_API_KEY; GROQ_MODEL is optional, then restart.",
+        "Groq is not configured. Set GROQ_API_KEY in CodeJam/.env; GROQ_MODEL is optional, then restart.",
       );
     }
     if (this.config.runtimeProvider === "fixture" && !fixtureSupportsPrompt(prompt)) {
       throw new HttpError(
         409,
-        "The credential-free fixture only runs the MandateFlow proof. Use a Codex Runtime for coding work.",
+        "The deterministic proof profile only runs the MandateFlow proof. Use a Codex Runtime for coding work.",
       );
     }
     if (this.config.mandateFlowEnabled) {

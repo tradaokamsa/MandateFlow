@@ -48,6 +48,7 @@ Volcengine ECS.
 - Docker, Colima, or Podman
 - A free Groq API key for the live Agent demonstration. Create one at
   [groq.com](https://groq.com/)
+- A `.env` file copied from `.env.example`, with `GROQ_API_KEY` set to that key
 
 Codex CLI is included in the Runtime image and is not required on the host.
 
@@ -82,6 +83,10 @@ Run the preferred judge path from the repository root (the directory that
 contains `CodeJam/`):
 
 ```bash
+# Run once from the repository root.
+cp CodeJam/.env.example CodeJam/.env
+# Edit CodeJam/.env and replace GROQ_API_KEY with your key from https://groq.com/
+
 # Run from the repository root (the directory containing CodeJam/).
 make demo
 ```
@@ -89,31 +94,21 @@ make demo
 `make demo` runs the single `CodeJam/scripts/start-local-poc.sh` engine after
 `make shutdown`, using port `3100`, a dedicated demo data root, and quiet build
 output. It frees known ports, removes stale MandateFlow containers/networks,
-loads a usable `../api_key.txt` automatically when present, and generates the
-browser unlock token. Copy the token from the startup banner and open
+loads `CodeJam/.env`, validates `GROQ_API_KEY`, and generates the browser
+unlock token. Copy the token from the startup banner and open
 <http://localhost:3100>. The first run installs dependencies, runs the Go test
 target, builds the images, and starts the live Codex Agent through Groq.
 
 For the live Agent profile, create a free Groq API key at
-[groq.com](https://groq.com/), then provide it through the environment or
-`api_key.txt`:
+[groq.com](https://groq.com/), copy `CodeJam/.env.example` to
+`CodeJam/.env`, and set `GROQ_API_KEY` in that file:
 
 ```bash
-RUNTIME_PROVIDER=container \
-GROQ_API_KEY='your-real-groq-api-key' \
-GROQ_MODEL='openai/gpt-oss-120b' \
-make demo
+RUNTIME_PROVIDER=container make demo
 ```
 
 The live Agent profile is the recommended path for the demo and supports
 general coding tasks in the disposable Runtime.
-
-The launcher loads a raw Groq key from `../api_key.txt` at the repository root
-without printing it. To load it manually for a direct run, use:
-
-```bash
-export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
-```
 
 The deterministic middleware proof still crosses Fastify → Streamable HTTP MCP → Go → SQLite → API/UI,
 but it is proof-only and does not demonstrate a general coding Agent.
@@ -277,7 +272,6 @@ Force Podman when multiple engines are installed:
 ```bash
 CONTAINER_ENGINE=podman \
 RUNTIME_PROVIDER=container \
-GROQ_API_KEY=your-groq-api-key \
 make demo
 ```
 
@@ -295,13 +289,14 @@ supported contributor path.
 Create and edit the configuration:
 
 ```bash
+cd CodeJam
 ./scripts/bootstrap-local.sh
 ```
 
 Required values in `.env`:
 
 ```dotenv
-GROQ_API_KEY=your-groq-api-key
+GROQ_API_KEY=replace-with-your-groq-api-key
 GROQ_MODEL=openai/gpt-oss-120b
 APP_AUTH_TOKEN=replace-with-at-least-24-random-characters
 ```
@@ -323,6 +318,7 @@ docker compose down
 ```bash
 npm install
 cp .env.example .env
+# Edit .env and set GROQ_API_KEY to your free key from https://groq.com/
 npm install --global @openai/codex@0.111.0
 npm run dev
 ```

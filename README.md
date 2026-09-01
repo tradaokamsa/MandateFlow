@@ -41,6 +41,8 @@ than three minutes of live interaction.
 - Docker, Colima, or rootless Podman
 - A free Groq API key for the live Agent demonstration. Create one at
   [groq.com](https://groq.com/)
+- A local `CodeJam/.env` file copied from `CodeJam/.env.example`, with
+  `GROQ_API_KEY` set to that key
 
 ### Start the live Agent demonstration
 
@@ -49,6 +51,8 @@ From the repository root, run the consolidated demo launcher:
 ```bash
 git clone https://github.com/tradaokamsa/MandateFlow.git
 cd MandateFlow
+cp CodeJam/.env.example CodeJam/.env
+# Edit CodeJam/.env and replace GROQ_API_KEY with your key from https://groq.com/
 make demo
 ```
 
@@ -56,20 +60,16 @@ make demo
 `CodeJam/scripts/start-local-poc.sh` with the demo defaults: port `3100`, an
 instance-specific data root, and quiet build output. It frees known project
 ports and removes stale MandateFlow containers/networks automatically. The
-launcher also loads a usable `api_key.txt` from the repository root when one is
-present and generates a URL-safe `APP_AUTH_TOKEN` when one was not supplied.
-The startup banner prints the token and the URL to open; do not include the
-token in a recording.
+launcher validates `CodeJam/.env`, loads `GROQ_API_KEY`, and generates a
+URL-safe `APP_AUTH_TOKEN` when one was not supplied. The startup banner prints
+the token and the URL to open; do not include the token in a recording.
 
 For the live Agent profile, create a free Groq API key at
-[groq.com](https://groq.com/), then provide it through the environment or place
-it in `api_key.txt`:
+[groq.com](https://groq.com/), copy `CodeJam/.env.example` to
+`CodeJam/.env`, and set `GROQ_API_KEY` in that file:
 
 ```bash
-RUNTIME_PROVIDER=container \
-GROQ_API_KEY='your-real-groq-api-key' \
-GROQ_MODEL='openai/gpt-oss-120b' \
-make demo
+RUNTIME_PROVIDER=container make demo
 ```
 
 The live Agent profile is the recommended path for the demo. The direct launcher
@@ -92,9 +92,9 @@ If you need an explicit token or provider when using the direct path:
 ```bash
 cd MandateFlow/CodeJam
 
+cp .env.example .env
+# Edit .env and replace GROQ_API_KEY with your key from https://groq.com/
 export RUNTIME_PROVIDER=container
-export GROQ_API_KEY='your-real-groq-api-key'
-export GROQ_MODEL='openai/gpt-oss-120b'
 export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
 npm run poc
 ```
@@ -115,14 +115,6 @@ unless `PORT` is overridden. Enter the `APP_AUTH_TOKEN` in the browser unlock
 screen. The startup log should say `Runtime provider: container` for the live
 Agent demo. The script automatically selects Docker, Colima, or Podman; set
 `CONTAINER_ENGINE=podman` to force Podman.
-
-If a local checkout stores the raw key in `api_key.txt` at the repository root,
-the launcher loads it automatically. To load it manually for a direct run,
-use:
-
-```bash
-export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
-```
 
 ### Run it end to end
 
@@ -145,10 +137,8 @@ export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
    > Runtime — consistent with reports of `tool_use_failed` on long tool
    > chains for Groq's gpt-oss models, though we only reproduced it once and
    > it may be model/tier/account dependent. If it happens on your key,
-   > restart with `RUNTIME_PROVIDER=fixture` (no Groq key needed) — it drives
-   > the identical Go Gateway/SQLite path through a deterministic script and
-   > is the reliable fallback for judging if the live model path is flaky on
-   > the day.
+   > restart with `RUNTIME_PROVIDER=fixture` to use the deterministic
+   > Go Gateway/SQLite proof path if the live model path is flaky on the day.
 6. Select **Retry denied call** and show that the Payment-derived CRM call is
    denied again with fresh Run authority but the same policy context and
    lineage.

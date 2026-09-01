@@ -78,6 +78,6 @@ help: ## Show this help
 	@echo "  make demo VERBOSE=1    # env-override verbose"
 	@echo "  ./run-poc.sh           # deprecated shim — use 'make demo'"
 
-# Note: start-local-poc.sh is now the single engine — it auto-loads ../api_key.txt,
-# auto-generates APP_AUTH_TOKEN, frees ports, and silences builds. `run-poc.sh`
+# Note: start-local-poc.sh is now the single engine — it loads CodeJam/.env,
+# validates GROQ_API_KEY, auto-generates APP_AUTH_TOKEN, frees ports, and silences builds. `run-poc.sh`
 # remains as a thin backwards-compat shim.

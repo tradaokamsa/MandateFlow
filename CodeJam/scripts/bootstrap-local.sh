@@ -12,5 +12,6 @@ fi
 mkdir -p data workspaces codex-home
 
 echo "Next:"
-echo "  1. Fill GROQ_API_KEY in .env; GROQ_MODEL is optional"
-echo "  2. Run: docker compose up --build"
+echo "  1. Set GROQ_API_KEY in .env to a free key from https://groq.com/"
+echo "  2. GROQ_MODEL is optional"
+echo "  3. Run: docker compose up --build"
