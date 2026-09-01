@@ -52,37 +52,39 @@ Replace `docker` with `podman` if applicable.
 
 ## End-to-end test
 
-The default E2E path is credential-free and requires Docker, Colima, or Podman
-only for the Go sidecar. It traverses the real Fastify → Streamable HTTP MCP →
-Go → SQLite → API path. Use the explicit `container` profile below when you
-want to rehearse the live Codex/Groq path.
+Create a free Groq API key at [groq.com](https://groq.com/) before running the
+live Agent path. The E2E path requires Docker, Colima, or Podman and traverses
+the real Fastify → Streamable HTTP MCP → Go → SQLite → API path.
 
 In terminal 1:
 
 ```bash
-cd CodeJam
-export APP_AUTH_TOKEN='mandateflow-local-e2e-token-2026'
-npm run poc
+make demo
 ```
 
-For the optional live model profile, add:
+For the live model profile, add:
 
 ```bash
-export RUNTIME_PROVIDER=container
-export GROQ_API_KEY='your-groq-api-key'
+RUNTIME_PROVIDER=container GROQ_API_KEY='your-groq-api-key' make demo
 ```
 
 In terminal 2:
 
 ```bash
 cd CodeJam
-export APP_AUTH_TOKEN='mandateflow-local-e2e-token-2026'
+export APP_AUTH_TOKEN='paste-the-token-from-the-make-demo-banner'
 
-curl -fsS http://localhost:3000/api/system
-curl -fsS http://localhost:3002/healthz
+curl -fsS http://localhost:3100/api/system
+curl -fsS http://localhost:3102/healthz
 
+MANDATEFLOW_E2E_BASE_URL=http://127.0.0.1:3100 \
 npm run check:mandateflow:e2e
 ```
+
+The `make demo` path generates and prints an unlock token and defaults to
+ports `3100` (Web/API) and `3102` (Go control). For a direct `npm run poc`
+run, the defaults remain `3000` and `3002`; set
+`MANDATEFLOW_E2E_BASE_URL` to the matching Web/API port.
 
 The E2E test validates the Support allow, Payment provenance denial before CRM,
 unchanged CRM counter, aggregate and fresh Support recovery, retry continuity,

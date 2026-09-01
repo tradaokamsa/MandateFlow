@@ -33,7 +33,9 @@ GOCACHE=/tmp/mandateflow-go-cache go test ./...
 ```
 
 The multi-stage [Dockerfile](Dockerfile) has a `test` target and a non-root,
-read-only-compatible final image. The normal local entry point is
-`npm run poc`, which generates the control token, mounts the persistent database
-directory, and attaches the sidecar and disposable Runtime containers to one
-instance-specific private bridge network.
+read-only-compatible final image. The normal local demo entry point is
+`make demo` from the repository root. It runs the single
+`CodeJam/scripts/start-local-poc.sh` launcher, which generates the control and
+browser tokens, mounts the persistent database directory, and attaches the
+sidecar and disposable Runtime containers to one instance-specific private
+bridge network. `npm run poc` remains the direct contributor path.

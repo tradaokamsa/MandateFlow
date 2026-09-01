@@ -5,7 +5,8 @@ Use one of two Volcengine ECS paths:
 - Install and deploy to an existing Linux ECS instance.
 - Provision the complete network and ECS stack with Terraform.
 
-Both profiles require a Groq API key. The default Responses model is
+Both profiles require a Groq API key. Create a free key at
+[groq.com](https://groq.com/). The default Responses model is
 `openai/gpt-oss-120b`.
 
 ## Existing Linux ECS

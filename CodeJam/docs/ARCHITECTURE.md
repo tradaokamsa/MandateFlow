@@ -1,10 +1,11 @@
 # Architecture
 
 MandateFlow keeps the starter's browser, Fastify orchestration, workspaces,
-Codex Runtime, and optional Groq inference path. A separate Go process is the
-reference monitor for five protected MCP operations. The local POC also has a
-credential-free deterministic fixture Runner that calls the same MCP endpoint
-from Node for judge-ready repeatability.
+Codex Runtime, and Groq inference path. A separate Go process is the reference
+monitor for five protected MCP operations. The local POC also has a deterministic
+fixture Runner that calls the same MCP endpoint from Node for judge-ready
+repeatability. Create a free Groq API key at [groq.com](https://groq.com/) for
+the live Agent profile.
 
 ```mermaid
 flowchart LR
@@ -15,7 +16,7 @@ flowchart LR
     Gateway --> GoStore["Go-owned SQLite<br/>contexts · runs · references · receipts · counters"]
     Service --> Runner["ContainerCodexRunner"]
     Runner --> Runtime["Disposable Codex Runtime"]
-    Runtime --> Groq["Groq Responses API<br/>(optional live profile)"]
+    Runtime --> Groq["Groq Responses API<br/>(live profile)"]
     Runtime -->|Streamable HTTP MCP<br/>per-Run bearer| Gateway
     Service --> Fixture["Deterministic fixture Runner"]
     Fixture -->|Streamable HTTP MCP<br/>per-Run bearer| Gateway
@@ -102,7 +103,7 @@ active-Runtime bearer theft, or provide exactly-once execution.
 
 | Profile | MandateFlow status |
 | --- | --- |
-| `npm run poc` local fixture | Submitted P0; Go sidecar, SQLite and credential-free MCP proof enabled |
-| `npm run poc` with `RUNTIME_PROVIDER=container` | Optional live Codex/Groq profile; Go sidecar and private Runtime network enabled |
+| `npm run poc` local fixture | Submitted P0; Go sidecar, SQLite and deterministic MCP proof enabled |
+| `npm run poc` with `RUNTIME_PROVIDER=container` | Live Codex/Groq profile; Go sidecar and private Runtime network enabled |
 | Local development | Baseline by default; enable only with a manually started sidecar |
 | Docker Compose / ECS | Starter baseline only; production sidecar deployment is P1 |

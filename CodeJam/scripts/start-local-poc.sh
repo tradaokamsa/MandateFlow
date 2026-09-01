@@ -4,11 +4,79 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 
+# --- Demo-quiet handling: silence docker/npm vomit unless --verbose ---
+POC_QUIET="${POC_QUIET:-0}"
+POC_VERBOSE="${POC_VERBOSE:-${VERBOSE:-0}}"
+for _arg in "$@"; do
+  case "$_arg" in
+    --verbose|-v) POC_VERBOSE=1; POC_QUIET=0 ;;
+    --quiet|-q) POC_QUIET=1; POC_VERBOSE=0 ;;
+    --help|-h)
+      printf 'Usage: %s [--verbose|-v] [--quiet|-q] [--help]\n' "$(basename "$0")" >&2
+      printf '  --verbose  Show full docker/npm build logs (for debugging)\n' >&2
+      printf '  --quiet    Hide build logs (default for demo)\n' >&2
+      printf '\nOne-click demo: make demo  (or ./CodeJam/scripts/start-local-poc.sh)\n' >&2
+      exit 0
+      ;;
+  esac
+done
+export POC_QUIET POC_VERBOSE
+
+is_quiet() { [[ "$POC_QUIET" == "1" && "$POC_VERBOSE" != "1" ]]; }
+
+# temp log for quiet runs — only shown on failure
+_poc_log_file="$(mktemp -t mandateflow-poc-XXXXXX.log 2>/dev/null || mktemp /tmp/mandateflow-poc-XXXXXX.log 2>/dev/null || echo /tmp/mandateflow-poc.log)"
+_poc_run() {
+  if is_quiet; then
+    if "$@" >"$_poc_log_file" 2>&1; then
+      rm -f "$_poc_log_file" 2>/dev/null || true
+      return 0
+    else
+      _rc=$?
+      printf '\n  ✖ %s failed (exit %s)\n' "$*" "$_rc" >&2
+      printf '  ── log ─────────────────────────────────────\n' >&2
+      cat "$_poc_log_file" >&2 || true
+      printf '  ────────────────────────────────────────────\n' >&2
+      printf '  Rerun with --verbose for full output: ./run-poc.sh --verbose\n' >&2
+      rm -f "$_poc_log_file" 2>/dev/null || true
+      return $_rc
+    fi
+  else
+    "$@"
+  fi
+}
+
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
   source .env
   set +a
+fi
+
+# --- One-click demo niceties (so `make demo` / direct `npm run poc` works without manual exports) ---
+# Auto-load Groq key from repo-root api_key.txt if not already exported (matches ./run-poc.sh behavior)
+if [[ -z "${GROQ_API_KEY:-}" ]]; then
+  for _key_file in "$repo_dir/../api_key.txt" "$repo_dir/api_key.txt"; do
+    if [[ -f "$_key_file" ]]; then
+      _loaded_key="$(tr -d '\r' < "$_key_file" 2>/dev/null | xargs 2>/dev/null || true)"
+      if [[ -n "${_loaded_key:-}" && "${_loaded_key}" != replace-* ]]; then
+        GROQ_API_KEY="$_loaded_key"
+        export GROQ_API_KEY
+        break
+      fi
+    fi
+  done
+fi
+# Auto-generate unlock token if not provided (one-click demo). Mirrors run-poc.sh.
+if [[ -z "${APP_AUTH_TOKEN:-}" || ${#APP_AUTH_TOKEN} -lt 24 || "$APP_AUTH_TOKEN" == replace-* || ! "$APP_AUTH_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+  if command -v node >/dev/null 2>&1; then
+    _gen_token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))' 2>/dev/null || true)"
+    if [[ -n "${_gen_token:-}" ]]; then
+      APP_AUTH_TOKEN="$_gen_token"
+      export APP_AUTH_TOKEN
+      _auto_token_generated=1
+    fi
+  fi
 fi
 
 mandateflow_dir="${MANDATEFLOW_DIR:-$repo_dir/../middleware/mandateflow}"
@@ -39,17 +107,35 @@ if [[ -z "$runtime_provider" || "$runtime_provider" == "local-process" ]]; then
 fi
 
 log() {
+  if is_quiet; then
+    # In quiet/demo mode keep chatter minimal — only show when explicitly verbose
+    if [[ "$POC_VERBOSE" == "1" ]]; then
+      printf '[local-poc] %s\n' "$*" >&2
+    fi
+  else
+    printf '[local-poc] %s\n' "$*" >&2
+  fi
+}
+log_err() {
+  # Always visible — errors / fatal messages even in quiet/demo mode
   printf '[local-poc] %s\n' "$*" >&2
+}
+step() {
+  # Always visible — concise demo progress line
+  printf '  → %s\n' "$*" >&2
+}
+ok() {
+  printf '  ✓ %s\n' "$*" >&2
 }
 
 if [[ "$runtime_provider" != "container" && "$runtime_provider" != "fixture" ]]; then
-  log "npm run poc supports RUNTIME_PROVIDER=container or RUNTIME_PROVIDER=fixture."
+  log_err "npm run poc supports RUNTIME_PROVIDER=container or RUNTIME_PROVIDER=fixture."
   exit 2
 fi
 
 if [[ ! -d "$mandateflow_dir" ]]; then
-  log "MandateFlow module was not found at $mandateflow_dir."
-  log "Set MANDATEFLOW_DIR to the middleware directory."
+  log_err "MandateFlow module was not found at $mandateflow_dir."
+  log_err "Set MANDATEFLOW_DIR to the middleware directory."
   exit 2
 fi
 mandateflow_dir="$(cd "$mandateflow_dir" && pwd)"
@@ -61,11 +147,11 @@ engine_works() {
 detect_engine() {
   if [[ -n "${CONTAINER_ENGINE:-}" ]]; then
     command -v "$CONTAINER_ENGINE" >/dev/null 2>&1 || {
-      log "CONTAINER_ENGINE=$CONTAINER_ENGINE was not found."
+      log_err "CONTAINER_ENGINE=$CONTAINER_ENGINE was not found."
       return 1
     }
     engine_works "$CONTAINER_ENGINE" || {
-      log "$CONTAINER_ENGINE is installed but its service is not running."
+      log_err "$CONTAINER_ENGINE is installed but its service is not running."
       return 1
     }
     printf '%s' "$CONTAINER_ENGINE"
@@ -79,7 +165,12 @@ detect_engine() {
 
   if command -v colima >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
     log "Docker is not reachable; starting Colima."
-    colima start >&2
+    if is_quiet; then
+      step "Starting Colima…"
+      _poc_run colima start
+    else
+      colima start >&2
+    fi
     if engine_works docker; then
       printf 'docker'
       return
@@ -89,7 +180,12 @@ detect_engine() {
   if command -v podman >/dev/null 2>&1; then
     if ! engine_works podman && [[ "$(uname -s)" == "Darwin" ]]; then
       log "Podman is not reachable; starting its macOS machine."
-      podman machine start >&2 || true
+      if is_quiet; then
+        step "Starting Podman machine…"
+        _poc_run podman machine start || true
+      else
+        podman machine start >&2 || true
+      fi
     fi
     if engine_works podman; then
       printf 'podman'
@@ -97,42 +193,118 @@ detect_engine() {
     fi
   fi
 
-  log "No running Docker, Colima, or Podman engine was found."
-  log "Install one of them, start it, and rerun this command."
+  log_err "No running Docker, Colima, or Podman engine was found."
+  log_err "Install one of them, start it, and rerun this command."
   return 1
 }
 
 if [[ "$runtime_provider" == "container" ]] && ! groq_key_is_usable; then
-  log "GROQ_API_KEY is required. GROQ_MODEL is optional."
-  log "Use RUNTIME_PROVIDER=fixture for the credential-free deterministic proof."
+  log_err "GROQ_API_KEY is required. GROQ_MODEL is optional."
+  log_err "Use RUNTIME_PROVIDER=fixture for the credential-free deterministic proof."
   exit 2
 fi
 
 app_auth_token="${APP_AUTH_TOKEN:-}"
 if [[ ${#app_auth_token} -lt 24 || "$app_auth_token" == replace-* || ! "$app_auth_token" =~ ^[A-Za-z0-9._~-]+$ ]]; then
-  log "APP_AUTH_TOKEN must contain at least 24 URL-safe characters."
-  log "The browser and E2E check use this token; do not show it in demo output."
+  log_err "APP_AUTH_TOKEN must contain at least 24 URL-safe characters."
+  log_err "The browser and E2E check use this token; do not show it in demo output."
   exit 2
 fi
 
 command -v node >/dev/null 2>&1 || {
-  log "Node.js 22+ is required to run the local control plane."
+  log_err "Node.js 22+ is required to run the local control plane."
   exit 2
 }
 
 node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
 if (( node_major < 22 )); then
-  log "Node.js 22+ is required; found $(node --version)."
+  log_err "Node.js 22+ is required; found $(node --version)."
   exit 2
 fi
 
+# Ensure demo ports are set early for freeing + banner (mirrors run-poc.sh defaults, but respect existing env)
+export PORT="${PORT:-3000}"
+export MANDATEFLOW_CONTROL_HOST_PORT="${MANDATEFLOW_CONTROL_HOST_PORT:-3002}"
+export MANDATEFLOW_RUNTIME_MCP_HOST_PORT="${MANDATEFLOW_RUNTIME_MCP_HOST_PORT:-3001}"
+
+# --- Smart port shutdown (so `make demo` / `npm run poc` doesn't hit EADDRINUSE) ---
+# Duplicated from run-poc.sh / Makefile `shutdown` — idempotent, quiet unless -v
+_free_port() {
+  local port="$1"
+  local pids=""
+  if command -v lsof >/dev/null 2>&1; then
+    pids="$(lsof -ti tcp:"$port" 2>/dev/null || true)"
+  elif command -v fuser >/dev/null 2>&1; then
+    pids="$(fuser -n tcp "$port" 2>/dev/null | tr -s ' ' '\n' | xargs || true)"
+  fi
+  if [[ -n "$pids" ]]; then
+    if is_quiet; then
+      # quiet: only hint if verbose, otherwise silent kill
+      if [[ "$POC_VERBOSE" == "1" ]]; then
+        printf '[local-poc] Freeing port %s (PIDs: %s)\n' "$port" "$(echo "$pids" | tr '\n' ' ')" >&2
+      fi
+    else
+      log "Freeing port $port (PIDs: $(echo "$pids" | tr '\n' ' '))"
+    fi
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    sleep 1
+    if command -v lsof >/dev/null 2>&1; then
+      pids="$(lsof -ti tcp:"$port" 2>/dev/null || true)"
+    else
+      pids=""
+    fi
+    if [[ -n "$pids" ]]; then
+      if is_quiet; then
+        [[ "$POC_VERBOSE" == "1" ]] && printf '[local-poc] Force-killing port %s (PIDs: %s)\n' "$port" "$(echo "$pids" | tr '\n' ' ')" >&2
+      else
+        log "Force-killing port $port (PIDs: $(echo "$pids" | tr '\n' ' '))"
+      fi
+      # shellcheck disable=SC2086
+      kill -9 $pids 2>/dev/null || true
+      sleep 0.5
+    fi
+  fi
+}
+_ports=("$PORT" "$MANDATEFLOW_CONTROL_HOST_PORT" "$MANDATEFLOW_RUNTIME_MCP_HOST_PORT" 3000 3001 3002 3100 3102 5173 34567)
+_seen=""
+for p in "${_ports[@]}"; do
+  [[ "$p" =~ ^[0-9]+$ ]] || continue
+  if [[ " $_seen " != *" $p "* ]]; then
+    _seen="$_seen $p"
+    _free_port "$p"
+  fi
+done
+
+# Demo banner (when token was auto-generated, like run-poc.sh)
+if [[ "${_auto_token_generated:-}" == "1" ]]; then
+  if is_quiet; then
+    printf '\n  MandateFlow — starting demo…\n' >&2
+    printf '  First run may take 1–2 min (building images); subsequent runs are fast.\n' >&2
+    printf '\n  Unlock token: %s\n' "$APP_AUTH_TOKEN" >&2
+    printf '  Open http://localhost:%s once ready\n\n' "$PORT" >&2
+  else
+    # verbose: already handled below via log, but ensure token visible
+    :
+  fi
+fi
+
 engine="$(detect_engine)"
-log "Using $engine as the Agent Runtime engine."
-log "Runtime provider: $runtime_provider"
+if is_quiet; then
+  step "Using $engine ($runtime_provider) — preparing environment…"
+else
+  log "Using $engine as the Agent Runtime engine."
+  log "Runtime provider: $runtime_provider"
+fi
 
 if [[ ! -d node_modules ]]; then
-  log "Installing application dependencies."
-  npm ci
+  if is_quiet; then
+    step "Installing dependencies…"
+    _poc_run npm --silent ci
+  else
+    log "Installing application dependencies."
+    npm ci
+  fi
 fi
 
 if [[ "${APP_DATA_DIR:-}" == "/app/data" ]]; then
@@ -177,6 +349,10 @@ mandateflow_sidecar_name="mandateflow-$RUNTIME_INSTANCE_ID"
 mandateflow_data_dir="$APP_DATA_DIR/mandateflow"
 mkdir -p "$APP_DATA_DIR" "$AGENT_WORKSPACE_ROOT" "$CODEX_HOME" "$mandateflow_data_dir"
 log "Persistent state: $local_state_root"
+if is_quiet; then
+  # Keep persistent state on verbose only; demo doesn't need path vomit
+  :
+fi
 export CONTAINER_USER="${CONTAINER_USER:-$(id -u):$(id -g)}"
 
 cleanup() {
@@ -192,36 +368,70 @@ cleanup() {
   fi
   "$engine" rm --force "$mandateflow_sidecar_name" >/dev/null 2>&1 || true
   "$engine" network rm "$MANDATEFLOW_CONTAINER_NETWORK" >/dev/null 2>&1 || true
+  rm -f "$_poc_log_file" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 # Recover exact instance-labelled resources after an interrupted local run.
 cleanup
 
-log "Building and testing the Go MandateFlow reference monitor."
-"$engine" build \
-  --target test \
-  --file "$mandateflow_dir/Dockerfile" \
-  --build-arg "GO_IMAGE=$mandateflow_go_image" \
-  "$mandateflow_dir"
-"$engine" build \
-  --file "$mandateflow_dir/Dockerfile" \
-  --build-arg "GO_IMAGE=$mandateflow_go_image" \
-  --tag "$mandateflow_image" \
-  "$mandateflow_dir"
+if is_quiet; then
+  step "Building MandateFlow sidecar… (cached after first run)"
+else
+  log "Building and testing the Go MandateFlow reference monitor."
+fi
+if is_quiet; then
+  _poc_run "$engine" build \
+    --target test \
+    --file "$mandateflow_dir/Dockerfile" \
+    --build-arg "GO_IMAGE=$mandateflow_go_image" \
+    "$mandateflow_dir"
+  _poc_run "$engine" build \
+    --file "$mandateflow_dir/Dockerfile" \
+    --build-arg "GO_IMAGE=$mandateflow_go_image" \
+    --tag "$mandateflow_image" \
+    "$mandateflow_dir"
+else
+  "$engine" build \
+    --target test \
+    --file "$mandateflow_dir/Dockerfile" \
+    --build-arg "GO_IMAGE=$mandateflow_go_image" \
+    "$mandateflow_dir"
+  "$engine" build \
+    --file "$mandateflow_dir/Dockerfile" \
+    --build-arg "GO_IMAGE=$mandateflow_go_image" \
+    --tag "$mandateflow_image" \
+    "$mandateflow_dir"
+fi
 
 if [[ "$runtime_provider" == "container" ]]; then
-  log "Building $runtime_image from Dockerfile.runtime (base: $runtime_base_image)."
-  "$engine" build \
-    --file Dockerfile.runtime \
-    --build-arg "NODE_IMAGE=$runtime_base_image" \
-    --build-arg "DEBIAN_MIRROR=$runtime_apt_mirror" \
-    --build-arg "DEBIAN_SECURITY_MIRROR=$runtime_apt_security_mirror" \
-    --build-arg "RUNTIME_APT_PACKAGES=$runtime_apt_packages" \
-    --tag "$runtime_image" \
-    .
+  if is_quiet; then
+    step "Building runtime image… (cached after first run)"
+    _poc_run "$engine" build \
+      --file Dockerfile.runtime \
+      --build-arg "NODE_IMAGE=$runtime_base_image" \
+      --build-arg "DEBIAN_MIRROR=$runtime_apt_mirror" \
+      --build-arg "DEBIAN_SECURITY_MIRROR=$runtime_apt_security_mirror" \
+      --build-arg "RUNTIME_APT_PACKAGES=$runtime_apt_packages" \
+      --tag "$runtime_image" \
+      .
+  else
+    log "Building $runtime_image from Dockerfile.runtime (base: $runtime_base_image)."
+    "$engine" build \
+      --file Dockerfile.runtime \
+      --build-arg "NODE_IMAGE=$runtime_base_image" \
+      --build-arg "DEBIAN_MIRROR=$runtime_apt_mirror" \
+      --build-arg "DEBIAN_SECURITY_MIRROR=$runtime_apt_security_mirror" \
+      --build-arg "RUNTIME_APT_PACKAGES=$runtime_apt_packages" \
+      --tag "$runtime_image" \
+      .
+  fi
 
-  log "Checking that the Runtime can bind-mount the configured state directories."
+  if is_quiet; then
+    step "Verifying container mounts…"
+  else
+    log "Checking that the Runtime can bind-mount the configured state directories."
+  fi
   preflight_user_args=(--user "$CONTAINER_USER")
   if [[ "$(basename "$engine")" == "podman" ]]; then
     preflight_user_args+=(--userns keep-id)
@@ -232,26 +442,37 @@ if [[ "$runtime_provider" == "container" ]]; then
     --mount "type=bind,src=$CODEX_HOME,dst=/codex-home" \
     "$runtime_image" sh -lc \
       'touch /workspace/.launchpad-write-test /codex-home/.launchpad-write-test && rm /workspace/.launchpad-write-test /codex-home/.launchpad-write-test'; then
-    log "The container engine cannot mount $local_state_root."
-    log "Set LOCAL_POC_DATA_ROOT to a directory shared with Docker/Colima/Podman."
+    log_err "The container engine cannot mount $local_state_root."
+    log_err "Set LOCAL_POC_DATA_ROOT to a directory shared with Docker/Colima/Podman."
     exit 2
   fi
 
   if [[ "$codex_sandbox_mode" == "workspace-write" ]] \
     && ! "$engine" run --rm "$runtime_image" \
       codex sandbox linux --full-auto -- true >/dev/null 2>&1; then
-    log "Codex Landlock is unavailable in this Linux Runtime."
-    log "Falling back to danger-full-access inside the disposable container boundary."
-    log "Do not mount unrelated secrets or host directories into the Agent Runtime."
+    log_err "Codex Landlock is unavailable in this Linux Runtime."
+    log_err "Falling back to danger-full-access inside the disposable container boundary."
+    log_err "Do not mount unrelated secrets or host directories into the Agent Runtime."
+    if is_quiet; then
+      step "Codex sandbox fallback: danger-full-access (container-isolated)"
+    fi
     codex_sandbox_mode=danger-full-access
   fi
 fi
 
-log "Creating the instance-specific Runtime network."
-"$engine" network create \
-  --label io.codejam.launchpad=mandateflow-network \
-  --label "io.codejam.instance-id=$RUNTIME_INSTANCE_ID" \
-  "$MANDATEFLOW_CONTAINER_NETWORK" >/dev/null
+if is_quiet; then
+  step "Creating runtime network…"
+  _poc_run "$engine" network create \
+    --label io.codejam.launchpad=mandateflow-network \
+    --label "io.codejam.instance-id=$RUNTIME_INSTANCE_ID" \
+    "$MANDATEFLOW_CONTAINER_NETWORK" >/dev/null
+else
+  log "Creating the instance-specific Runtime network."
+  "$engine" network create \
+    --label io.codejam.launchpad=mandateflow-network \
+    --label "io.codejam.instance-id=$RUNTIME_INSTANCE_ID" \
+    "$MANDATEFLOW_CONTAINER_NETWORK" >/dev/null
+fi
 
 export MANDATEFLOW_CONTROL_TOKEN="$(node -e 'const c=require("node:crypto");process.stdout.write("mfc1_"+c.randomBytes(32).toString("base64url"))')"
 export MANDATEFLOW_RUN_TTL_MS="$((${CODEX_TIMEOUT_MS:-600000} + 60000))"
@@ -273,7 +494,11 @@ if [[ "$(basename "$engine")" == "podman" ]]; then
   sidecar_user_args+=(--userns keep-id)
 fi
 
-log "Starting the Go MandateFlow sidecar."
+if is_quiet; then
+  step "Starting MandateFlow sidecar…"
+else
+  log "Starting the Go MandateFlow sidecar."
+fi
 "$engine" run --detach \
   --name "$mandateflow_sidecar_name" \
   --label io.codejam.launchpad=mandateflow-sidecar \
@@ -301,7 +526,10 @@ for _attempt in $(seq 1 50); do
   sleep 0.2
 done
 if [[ "$mandateflow_ready" != true ]]; then
-  log "MandateFlow did not become ready."
+  log_err "MandateFlow did not become ready."
+  if is_quiet; then
+    printf '  ✖ MandateFlow sidecar did not become ready\n' >&2
+  fi
   "$engine" logs "$mandateflow_sidecar_name" >&2 || true
   exit 2
 fi
@@ -314,8 +542,16 @@ export RUNTIME_PROVIDER="$runtime_provider"
 export CONTAINER_ENGINE="$engine"
 export CONTAINER_RUNTIME_IMAGE="$runtime_image"
 
-log "Building the local Web and API."
-npm run build
-
-log "Open http://localhost:$PORT"
+if is_quiet; then
+  step "Building web & API…"
+  _poc_run npm --silent run build
+  ok "Build complete — launching"
+  printf '\n  ── MandateFlow ready ─────────────────────\n' >&2
+  printf '  → Open http://localhost:%s\n' "$PORT" >&2
+  printf '  ──────────────────────────────────────────\n\n' >&2
+else
+  log "Building the local Web and API."
+  npm run build
+  log "Open http://localhost:$PORT"
+fi
 npm start

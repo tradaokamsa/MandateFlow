@@ -46,8 +46,8 @@ Volcengine ECS.
 - Node.js 22+
 - npm 10+
 - Docker, Colima, or Podman
-- A Groq API key for the live Agent demonstration (`container` Runtime profile)
-- No Groq key is needed for the deterministic middleware-only fallback
+- A free Groq API key for the live Agent demonstration. Create one at
+  [groq.com](https://groq.com/)
 
 Codex CLI is included in the Runtime image and is not required on the host.
 
@@ -78,46 +78,53 @@ Skip this step when already working from the repository root.
 
 ### 3. Start the live Agent demonstration
 
+Run the preferred judge path from the repository root (the directory that
+contains `CodeJam/`):
+
 ```bash
-export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
-export RUNTIME_PROVIDER=container
-export GROQ_API_KEY='your-real-groq-api-key'
-export GROQ_MODEL='openai/gpt-oss-120b'
-npm run poc
+# Run from the repository root (the directory containing CodeJam/).
+make demo
 ```
 
-The first run installs Node.js dependencies, runs the Go test target, builds the
-MandateFlow image and the disposable Codex Runtime image, then starts the live
-Codex Agent through Groq. The script automatically selects Docker, Colima, or
-Podman. Enter `APP_AUTH_TOKEN` in the browser unlock screen. The startup log
-must say `Runtime provider: container`; if it says `fixture`, the Groq key was
-not loaded.
+`make demo` runs the single `CodeJam/scripts/start-local-poc.sh` engine after
+`make shutdown`, using port `3100`, a dedicated demo data root, and quiet build
+output. It frees known ports, removes stale MandateFlow containers/networks,
+loads a usable `../api_key.txt` automatically when present, and generates the
+browser unlock token. Copy the token from the startup banner and open
+<http://localhost:3100>. The first run installs dependencies, runs the Go test
+target, builds the images, and starts the live Codex Agent through Groq.
 
-If this checkout stores the raw Groq key in `../api_key.txt` at the repository
-root, load it without printing it:
+For the live Agent profile, create a free Groq API key at
+[groq.com](https://groq.com/), then provide it through the environment or
+`api_key.txt`:
+
+```bash
+RUNTIME_PROVIDER=container \
+GROQ_API_KEY='your-real-groq-api-key' \
+GROQ_MODEL='openai/gpt-oss-120b' \
+make demo
+```
+
+The live Agent profile is the recommended path for the demo and supports
+general coding tasks in the disposable Runtime.
+
+The launcher loads a raw Groq key from `../api_key.txt` at the repository root
+without printing it. To load it manually for a direct run, use:
 
 ```bash
 export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
 ```
 
-For a middleware-only run without a model credential, use the deterministic
-fallback explicitly:
-
-```bash
-export RUNTIME_PROVIDER=fixture
-npm run poc
-```
-
-Fixture mode still crosses Fastify → Streamable HTTP MCP → Go → SQLite → API/UI,
+The deterministic middleware proof still crosses Fastify → Streamable HTTP MCP → Go → SQLite → API/UI,
 but it is proof-only and does not demonstrate a general coding Agent.
 
 ### 4. Open the browser
 
-Visit <http://localhost:3000>, or open it from the terminal:
+For `make demo`, visit <http://localhost:3100>, or open it from the terminal:
 
 ```bash
-open http://localhost:3000       # macOS
-xdg-open http://localhost:3000   # Linux desktop
+open http://localhost:3100       # macOS
+xdg-open http://localhost:3100   # Linux desktop
 ```
 
 In the Web UI:
@@ -224,21 +231,42 @@ workspaces, conversations, and the MandateFlow SQLite journal.
 - Linux state: `.local/`
 - Custom location: set `LOCAL_POC_DATA_ROOT`
 
-Run the same `npm run poc` command to continue later.
-
-If port `3000` is already in use, choose another loopback port and open that
-address in the browser:
+Run `make demo` again to continue later. The direct launcher remains available
+for contributors:
 
 ```bash
-PORT=3100 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run poc
-open http://127.0.0.1:3100
+./CodeJam/scripts/start-local-poc.sh --quiet   # from repository root; :3000
+cd CodeJam && POC_QUIET=1 npm --silent run poc  # direct npm path; :3000
 ```
+
+Direct `start-local-poc.sh` and raw `npm run poc` default to `POC_QUIET=0` and
+port `3000` unless overridden. `--verbose`, `VERBOSE=1`, or `POC_VERBOSE=1`
+shows full Docker/npm build logs; `--quiet` or `POC_QUIET=1` shows concise
+progress and the generated token banner. `npm --silent run poc` only silences
+npm's wrapper messages. `run-poc.sh` is a backwards-compatible root shim;
+prefer `make demo`.
+
+If you need another port or another local instance, override the Makefile
+values:
+
+```bash
+PORT=3200 \
+MANDATEFLOW_CONTROL_HOST_PORT=3202 \
+MANDATEFLOW_RUNTIME_MCP_HOST_PORT=3201 \
+RUNTIME_INSTANCE_ID=second-demo \
+make demo
+open http://127.0.0.1:3200
+```
+
+`make shutdown`, `make stop`, and `make kill-ports` free project ports and
+remove stale labeled resources. The cleanup port list can be overridden with
+`make PORTS='3200 3201 3202' shutdown`.
 
 For a terminal-only check against that running instance:
 
 ```bash
 MANDATEFLOW_E2E_BASE_URL=http://127.0.0.1:3100 \
-APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
+APP_AUTH_TOKEN='paste-the-token-from-the-make-demo-banner' \
 npm run check:mandateflow:e2e
 ```
 
@@ -248,10 +276,9 @@ Force Podman when multiple engines are installed:
 
 ```bash
 CONTAINER_ENGINE=podman \
-APP_AUTH_TOKEN="$APP_AUTH_TOKEN" \
 RUNTIME_PROVIDER=container \
 GROQ_API_KEY=your-groq-api-key \
-npm run poc
+make demo
 ```
 
 Colima uses `CONTAINER_ENGINE=docker` because it exposes the Docker CLI.
@@ -262,8 +289,9 @@ For a clean Linux host, follow the
 ## Docker Compose (baseline profile)
 
 Docker Compose and ECS retain the starter profile and do not start the
-MandateFlow sidecar. The submitted Track 1 path is `npm run poc` with disposable
-local Runtime containers.
+MandateFlow sidecar. The submitted Track 1 path is `make demo`, which starts
+the disposable local Runtime containers; direct `npm run poc` remains a
+supported contributor path.
 
 Create and edit the configuration:
 
@@ -343,14 +371,14 @@ cp deploy/volcengine/terraform.tfvars.example \
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GROQ_API_KEY` | Optional | Required only for `RUNTIME_PROVIDER=container`. |
+| `GROQ_API_KEY` | Required for the live Agent demo | Create a free key at [groq.com](https://groq.com/). |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Responses-capable Groq model. |
 | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Groq OpenAI-compatible API URL. |
 | `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
-| `MANDATEFLOW_ENABLED` | `false` | Enables fail-closed Run lifecycle integration. `npm run poc` sets it to `true`. |
+| `MANDATEFLOW_ENABLED` | `false` | Enables fail-closed Run lifecycle integration. The local POC launcher sets it to `true`. |
 | `MANDATEFLOW_CONTROL_URL` | `http://127.0.0.1:3002` | Host-only Go lifecycle/evidence endpoint. |
 | `MANDATEFLOW_RUNTIME_MCP_URL` | `http://mandateflow-gateway:3001/mcp` | MCP URL visible inside the private Runtime network. |
-| `RUNTIME_PROVIDER` | `local-process` | `container` for live disposable Runtime containers or `fixture` for the credential-free proof. `npm run poc` selects `fixture` when no usable Groq key is present. |
+| `RUNTIME_PROVIDER` | `local-process` | `container` for the live disposable Runtime profile or `fixture` for the deterministic middleware proof. |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode. |
 | `CODEX_TIMEOUT_MS` | `600000` | Maximum duration of one turn. |
 | `LOCAL_POC_DATA_ROOT` | Platform-specific | Local metadata, workspace, and session directory. |
@@ -367,7 +395,7 @@ flowchart LR
     Go --> SQLite["Go-owned SQLite"]
     API --> Container["Disposable Codex Runtime"]
     Container -->|per-Run bearer + MCP| Go
-    Container --> Groq["Groq Responses API (optional live profile)"]
+    Container --> Groq["Groq Responses API (live profile)"]
     Go --> Fixtures["Protected Support / Payments / Cases / CRM fixtures"]
 ```
 
@@ -391,8 +419,7 @@ docker compose config
 
 Use `npm run test:server:watch` while iterating on the server. `check:fast`
 runs TypeScript typechecks, server and web tests, Go formatting, `go vet`, and
-race tests without production bundle builds, Docker image builds, or Groq
-requests.
+race tests without production bundle builds or Docker image builds.
 It requires a local Go 1.23+ toolchain. Keep `npm run check` as the complete
 local gate before opening a pull request.
 

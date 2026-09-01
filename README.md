@@ -25,6 +25,10 @@ cross-tool flow is safe.
 > allowed or denied based solely on the trusted provenance of its input — and
 > recreating the Runtime cannot erase that provenance.
 
+![MandateFlow architecture showing the CodeJam baseline, trusted Go gateway, and protected fixtures](CodeJam/docs/assets/architecture-overview.jpg)
+
+*MandateFlow places a trusted Go gateway between the Agent runtime and protected fixtures.*
+
 ## Judge's fast path
 
 The intended judging path is one local command, one browser scenario, and less
@@ -35,19 +39,63 @@ than three minutes of live interaction.
 - macOS or Linux
 - Node.js 22+ and npm 10+
 - Docker, Colima, or rootless Podman
-- A Groq API key for the live Agent demonstration (`container` Runtime profile)
-- No Groq key is needed for the deterministic middleware-only fallback
+- A free Groq API key for the live Agent demonstration. Create one at
+  [groq.com](https://groq.com/)
 
 ### Start the live Agent demonstration
 
+From the repository root, run the consolidated demo launcher:
+
 ```bash
 git clone https://github.com/tradaokamsa/MandateFlow.git
+cd MandateFlow
+make demo
+```
+
+`make demo` first runs the smart `shutdown` cleanup, then starts
+`CodeJam/scripts/start-local-poc.sh` with the demo defaults: port `3100`, an
+instance-specific data root, and quiet build output. It frees known project
+ports and removes stale MandateFlow containers/networks automatically. The
+launcher also loads a usable `api_key.txt` from the repository root when one is
+present and generates a URL-safe `APP_AUTH_TOKEN` when one was not supplied.
+The startup banner prints the token and the URL to open; do not include the
+token in a recording.
+
+For the live Agent profile, create a free Groq API key at
+[groq.com](https://groq.com/), then provide it through the environment or place
+it in `api_key.txt`:
+
+```bash
+RUNTIME_PROVIDER=container \
+GROQ_API_KEY='your-real-groq-api-key' \
+GROQ_MODEL='openai/gpt-oss-120b' \
+make demo
+```
+
+The live Agent profile is the recommended path for the demo. The direct launcher
+alternatives are:
+
+```bash
+./CodeJam/scripts/start-local-poc.sh       # direct path; defaults to :3000
+make demo-verbose                          # full Docker/npm logs
+make demo VERBOSE=1                        # same, via environment override
+```
+
+The direct launcher and `npm run poc` remain supported for contributors. The
+direct script defaults to `POC_QUIET=0`; use `POC_QUIET=1` (or `--quiet`) for
+the concise progress UI. `--verbose`, `VERBOSE=1`, or `POC_VERBOSE=1` restores
+full build output. `npm --silent run poc` only silences npm's own wrapper
+messages; it does not enable the launcher's quiet mode.
+
+If you need an explicit token or provider when using the direct path:
+
+```bash
 cd MandateFlow/CodeJam
 
-export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
 export RUNTIME_PROVIDER=container
 export GROQ_API_KEY='your-real-groq-api-key'
 export GROQ_MODEL='openai/gpt-oss-120b'
+export APP_AUTH_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
 npm run poc
 ```
 
@@ -61,31 +109,27 @@ npm run poc
 
 The launcher installs dependencies when needed, builds the Go sidecar and
 starts a disposable Codex Runtime backed by Groq, creates an instance network,
-and starts the production Web/API bundle at <http://localhost:3000>. Enter the
-generated `APP_AUTH_TOKEN` in the browser unlock screen. The startup log must
-say `Runtime provider: container`; if it says `fixture`, the Groq key was not
-loaded. The script automatically selects Docker, Colima, or Podman; set
+and starts the production Web/API bundle. `make demo` opens at
+<http://localhost:3100>; direct `npm run poc` opens at <http://localhost:3000>
+unless `PORT` is overridden. Enter the `APP_AUTH_TOKEN` in the browser unlock
+screen. The startup log should say `Runtime provider: container` for the live
+Agent demo. The script automatically selects Docker, Colima, or Podman; set
 `CONTAINER_ENGINE=podman` to force Podman.
 
 If a local checkout stores the raw key in `api_key.txt` at the repository root,
-load it without printing it:
+the launcher loads it automatically. To load it manually for a direct run,
+use:
 
 ```bash
 export GROQ_API_KEY="$(tr -d '\r\n' < ../api_key.txt)"
 ```
 
-The credential-free fixture Runtime remains available for middleware-only
-verification:
-
-```bash
-export RUNTIME_PROVIDER=fixture
-npm run poc
-```
-
 ### Run it end to end
 
-1. Leave `npm run poc` running, open <http://localhost:3000>, and enter the
-   generated `APP_AUTH_TOKEN` in the unlock screen.
+1. Leave `make demo` running, open <http://localhost:3100>, and enter the
+   token printed by the startup banner in the unlock screen. For direct
+   `npm run poc`, use the `PORT` value supplied to that command (the default is
+   `3000`).
 2. Select **Create Agent**, enter any name/description/instructions, and create
    the Agent. The default demo owner is `user-a`.
 3. Select **Start** for the new Agent. Send the coding starter prompt
@@ -303,7 +347,7 @@ The submission is organized around the Track 1 judging weights:
 | **40%** | End-to-end middleware behavior | Browser-triggered Codex Run → real Streamable HTTP MCP Gateway → allowed protected operation, pre-execution provenance denial, and safe recovery. |
 | **25%** | Technical design and integration | Explicit Fastify/AgentService/AgentRunner seams, immutable authority contract, exclusive protected path, trust-boundary diagram, and failure semantics. |
 | **20%** | Verification and robustness | Go unit/integration tests for scope, provenance, forged references, ownership, revocation, retry continuity, redaction, non-invocation, and HTTP authentication; TypeScript tests for lifecycle and runtime wiring. |
-| **15%** | Demo and reproducibility | `npm run poc`, deterministic typed fixtures, documented Docker/Colima/Podman path, three-minute script, automated checks, and honest limitations. |
+| **15%** | Demo and reproducibility | `make demo`, deterministic typed fixtures, documented Docker/Colima/Podman path, three-minute script, automated checks, and honest limitations. |
 
 Track 1 asks teams to preserve the starter, implement real behavior in a
 backend/Runtime/data/infrastructure path, show a normal and failure/denial or
@@ -324,15 +368,14 @@ npm run check
 # Focused Go middleware check
 npm run check:mandateflow
 
-# Against an already running credential-free POC
+# Against an already running POC
 APP_AUTH_TOKEN="$APP_AUTH_TOKEN" npm run check:mandateflow:e2e
 ```
 
 The E2E check prints the initial and retry Run IDs, shared policy-context ID,
 unchanged CRM counter, denial receipt IDs, and the fresh post-revocation
-context. It is separate from `npm run check` because it starts the local POC;
-the default fixture path does not require a model request. Set
-`RUNTIME_PROVIDER=container` to run the optional live Codex/Groq variant.
+context. It is separate from `npm run check` because it starts the local POC.
+Set `RUNTIME_PROVIDER=container` to run the live Codex/Groq variant.
 
 ### What the Gateway actually decided — one real run
 
@@ -387,6 +430,7 @@ state.
 CodeJam/                         React UI, Fastify API, Codex runners, launcher
 middleware/mandateflow/          Go sidecar, MCP gateway, policy, SQLite store
 mandateflow_docs/                Design rationale, contracts, and diagrams
+Makefile                         Judge-facing demo, cleanup, and verbose-debug targets
 MIDDLEWARE_TESTING.md            Focused test and live-E2E commands
 ```
 

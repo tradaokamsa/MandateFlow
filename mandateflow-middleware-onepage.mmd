@@ -1,0 +1,71 @@
+%% MandateFlow-only demo flow
+%% Scope: the capability, gateway decision, protected fixtures and evidence that
+%% MandateFlow contributes. The surrounding Agent platform is intentionally omitted.
+
+flowchart TD
+  classDef start fill:#f8fafc,stroke:#334155,stroke-width:2,color:#0f172a
+  classDef control fill:#eff6ff,stroke:#2563eb,stroke-width:1.8,color:#1e293b
+  classDef gateway fill:#fff7ed,stroke:#ea580c,stroke-width:2,color:#7c2d12
+  classDef decision fill:#f8fafc,stroke:#ea580c,stroke-width:2,color:#7c2d12
+  classDef allow fill:#ecfdf5,stroke:#059669,stroke-width:1.8,color:#064e3b
+  classDef deny fill:#fff1f2,stroke:#dc2626,stroke-width:1.8,color:#7f1d1d
+  classDef evidence fill:#f5f3ff,stroke:#7c3aed,stroke-width:1.8,color:#4c1d95
+
+  start([Start secure workflow]):::start
+
+  subgraph authority["1. Create MandateFlow authority"]
+    direction LR
+    mandate["Root mandate: purpose + pinned policy"]:::control
+    grant["Immutable Run grant: attenuated scope + expiry"]:::control
+    capability["Fresh short-lived capability: mfr1_ bearer"]:::control
+    mandate --> grant --> capability
+  end
+
+  start --> mandate
+  capability --> request["Protected tool call enters the MandateFlow MCP Gateway"]:::gateway
+
+  subgraph checks["2. Check every protected call"]
+    direction TB
+    gatewayChecks["Authenticate capability; load trusted Run state"]:::gateway
+    scopeCheck["Check static scope: tool + action + resource"]:::gateway
+    lineageCheck["Resolve opaque reference and stored ancestry"]:::gateway
+    policyCheck{"Does trusted provenance satisfy the policy?"}:::decision
+    gatewayChecks --> scopeCheck --> lineageCheck --> policyCheck
+  end
+
+  request --> gatewayChecks
+  policyCheck -->|"Yes"| allowed["ALLOW: run the protected fixture"]:::allow
+  policyCheck -->|"No"| denied["DENY before execution: FLOW_DENIED"]:::deny
+
+  subgraph demo["3. The video-demo proof"]
+    direction TB
+    supportPath["Support -> Case -> CRM: allowed"]:::allow
+    supportResult["CRM counter 0 -> 1; redacted result returned"]:::allow
+    paymentPath["Payment -> Case -> CRM: denied"]:::deny
+    paymentResult["FLOW_DENIED by NO_PAYMENT_REIDENTIFICATION; counter 1 -> 1"]:::deny
+    safeAlternative["Safe alternative: payments.aggregate_failures"]:::allow
+    retryPath["Retry: new Run + capability, same context + lineage"]:::deny
+    supportPath --> supportResult
+    paymentPath --> paymentResult --> safeAlternative
+    paymentResult --> retryPath
+  end
+
+  allowed --> supportPath
+  denied --> paymentPath
+
+  subgraph evidenceTrail["4. Evidence that MandateFlow leaves behind"]
+    direction LR
+    journal["SQLite receipt journal: decisions, outcomes, counters, causal links"]:::evidence
+    timeline["Redacted evidence timeline: proves allow, denial and non-invocation"]:::evidence
+    journal --> timeline
+  end
+
+  supportResult --> journal
+  paymentResult --> journal
+  safeAlternative --> journal
+  retryPath --> journal
+
+  style authority fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px
+  style checks fill:#fff7ed,stroke:#fdba74,stroke-width:1px
+  style demo fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px
+  style evidenceTrail fill:#faf5ff,stroke:#c4b5fd,stroke-width:1px

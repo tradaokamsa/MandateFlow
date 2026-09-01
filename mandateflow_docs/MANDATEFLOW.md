@@ -4,7 +4,7 @@
 
 > Least privilege that survives tool chaining and disposable-Runtime retries.
 
-- **Status:** Go P0/P1 authority hardening and credential-free end-to-end proof implemented; live Codex acceptance remains an optional pre-demo check
+- **Status:** Go P0/P1 authority hardening and end-to-end middleware proof implemented; live Codex acceptance is the recommended pre-demo check
 - **Primary runtime:** Deterministic fixture Runtime by default, or local disposable Codex container with Groq
 - **Primary boundary:** Protected MCP tool calls
 - **MVP scope:** One mixed-purpose workflow, typed protected references and one deterministic flow policy
@@ -821,9 +821,9 @@ Codex container
 This verifies the real Streamable HTTP protocol path, the selected container
 engine's host route, and capability delivery by environment variable. Docker or
 another engine receives only the environment-variable name in argv, never the
-capability value. The default credential-free fixture Runner exercises the same
-MCP protocol path from Node and is the repeatable acceptance lane when no model
-credential is available.
+capability value. The deterministic fixture Runner exercises the same MCP
+protocol path from Node and is the repeatable acceptance lane for middleware
+verification.
 
 For the chosen local Runtime profile:
 
@@ -849,7 +849,7 @@ For the chosen local Runtime profile:
 | `apps/server/src/config.ts` | Generate the MCP configuration with only the Gateway URL and bearer environment-variable name. |
 | `apps/server/src/codex-runner.ts` | Add request-specific capability environment injection without logging the value. |
 | `apps/server/src/container-codex-runner.ts` | Key active processes, container names and cancellation by `runId`; inject the named environment variable, configure the tested host route and expose a Runtime/container identifier for demo evidence. |
-| `apps/server/src/fixture-runner.ts` | Provide the credential-free deterministic proof Runner over the same Streamable HTTP MCP boundary, including durable opaque retry state. |
+| `apps/server/src/fixture-runner.ts` | Provide the deterministic proof Runner over the same Streamable HTTP MCP boundary, including durable opaque retry state. |
 | `apps/server/src/mandateflow-client.ts` | Strict authenticated client for Go lifecycle and evidence control operations; contains no policy logic. |
 | `middleware/mandateflow/` (sibling to `CodeJam/`) | Go Streamable HTTP MCP gateway, immutable grants, provenance/reference monitor, embedded fixtures, receipts and five-table SQLite store. |
 | `middleware/mandateflow/config/mixed-operations.v1.json` | Startup-validated and context-pinned MVP rule. |
@@ -861,7 +861,7 @@ For the chosen local Runtime profile:
 
 ### Winning path
 
-- The pinned Codex container, or the credential-free deterministic fixture
+- The pinned Codex container, or the deterministic fixture
   Runtime, performs real MCP initialization, `tools/list` and authenticated
   `tools/call` requests through the Streamable HTTP Gateway.
 - Both Support and Payment references may pass through `cases.lookup_subject`.
@@ -875,7 +875,7 @@ For the chosen local Runtime profile:
   unchanged.
 - Codex calls `payments.aggregate_failures` and completes both halves of the Run.
 - The fixture rehearsal completes the same allow/deny/aggregate/fresh-Support
-  choreography without a model credential and persists its opaque retry state
+  choreography through the deterministic fixture path and persists its opaque retry state
   under the per-Agent Codex home.
 - After mandate revocation, New secure workflow clears the thread association;
   the next Run receives a new policy context, grant and capability and old
@@ -1040,7 +1040,7 @@ support unit tests, but it is not acceptable as the submitted end-to-end proof.
   with the documented demo command.
 - Store the exact prompt, untrusted runbook fragment and expected
   receipt/counter sequence in `docs/DEMO.md`.
-- Pre-build the sidecar and, for the optional live profile, the Runtime image
+- Pre-build the sidecar and the Runtime image for the live profile
   and model access; execute the actual protected tool path live.
 - Do not depend on model improvisation for ordering: the seeded Agent instruction
   explicitly requests Support first, then Payment analysis through the legacy
