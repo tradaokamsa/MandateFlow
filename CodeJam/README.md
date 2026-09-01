@@ -283,8 +283,7 @@ make demo
 
 Colima uses `CONTAINER_ENGINE=docker` because it exposes the Docker CLI.
 
-For a clean Linux host, follow the
-[rootless Podman setup](docs/LOCAL_POC.md#rootless-podman-on-linux).
+For a clean Linux host, use the rootless Podman commands above.
 
 ## Docker Compose (baseline profile)
 
@@ -348,9 +347,8 @@ into a Runtime container.
 
 ## Deployment
 
-- [Existing Linux ECS with Docker](docs/DEPLOYMENT.md#existing-linux-ecs)
-- [Complete Volcengine environment with Terraform](docs/DEPLOYMENT.md#terraform-deployment)
-- [Local Docker, Colima, and Podman details](docs/LOCAL_POC.md)
+The scripts below cover existing Linux ECS and complete Volcengine Terraform
+deployment. The local submission path remains `make demo`.
 
 The existing-ECS script deploys from the current source tree:
 
@@ -403,8 +401,8 @@ Node owns only UI/orchestration metadata. Go exclusively owns grants, capability
 digests, reference lineage, fixture counters, and redacted receipts. Raw Run
 capabilities are injected only into the matching Runtime process environment.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component and extension
-boundaries.
+The architecture diagram and ownership table above show the component and
+extension boundaries.
 
 ## Validation
 
@@ -425,9 +423,6 @@ local gate before opening a pull request.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Local POC](docs/LOCAL_POC.md)
-- [Deployment](docs/DEPLOYMENT.md)
 - [Security policy](SECURITY.md)
 
 ## License

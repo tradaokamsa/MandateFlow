@@ -305,8 +305,7 @@ profile it is published only on loopback so the Node fixture runner can cross
 the same HTTP boundary. The Go control listener is loopback-only. Each live
 Runtime mounts only its selected Agent workspace and private Codex home.
 
-Read the deeper boundary and lifecycle details in
-[CodeJam/docs/ARCHITECTURE.md](CodeJam/docs/ARCHITECTURE.md).
+The component ownership table above summarizes the boundary and lifecycle.
 
 ### Mapped to Track 1's own layered architecture
 
@@ -427,9 +426,8 @@ Makefile                         Judge-facing demo, cleanup, and verbose-debug t
 
 Useful reading order:
 
-1. [Architecture](CodeJam/docs/ARCHITECTURE.md)
-2. [Go gateway README](middleware/mandateflow/README.md)
-3. [Local POC details](CodeJam/docs/LOCAL_POC.md)
+1. [Go gateway README](middleware/mandateflow/README.md)
+2. [CodeJam project README](CodeJam/README.md)
 
 ## License
 
