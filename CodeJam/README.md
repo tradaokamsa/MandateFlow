@@ -427,11 +427,8 @@ local gate before opening a pull request.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Local POC](docs/LOCAL_POC.md)
-- [Three-minute demo and acceptance evidence](docs/DEMO.md)
 - [Deployment](docs/DEPLOYMENT.md)
-- [Hackathon extension guide](docs/HACKATHON_EXTENSION_GUIDE.md)
 - [Security policy](SECURITY.md)
-- [Contributing](CONTRIBUTING.md)
 
 ## License
 

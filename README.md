@@ -240,12 +240,8 @@ When the walkthrough is finished, press `Ctrl+C` in the POC terminal. Temporary
 Runtime containers, the Go sidecar, and its private network are removed; Agent
 workspaces and the redacted journal remain on disk.
 
-For the exact acceptance walkthrough, see
-[CodeJam/docs/DEMO.md](CodeJam/docs/DEMO.md).
-
 For the local operator SOP, progress/recovery behavior, and troubleshooting,
-see [CodeJam/README.md](CodeJam/README.md). The completed browser audit and
-captured evidence are recorded in [audit/UX-AUDIT.md](audit/UX-AUDIT.md).
+see [CodeJam/README.md](CodeJam/README.md).
 
 ## What problem is solved?
 
@@ -293,10 +289,8 @@ Only the UI needed to operate and explain the middleware was added.
 
 ## Architecture and trust boundary
 
-![MandateFlow integration architecture](mandateflow_docs/mandateflow-assets/mandateflow-architecture.svg)
-
-The one-page diagram above shows the integration seams and trust boundary. The
-short version is:
+The architecture diagram near the top shows the integration seams and trust
+boundary. The short version is:
 
 | Component | Owns |
 | --- | --- |
@@ -312,8 +306,7 @@ the same HTTP boundary. The Go control listener is loopback-only. Each live
 Runtime mounts only its selected Agent workspace and private Codex home.
 
 Read the deeper boundary and lifecycle details in
-[CodeJam/docs/ARCHITECTURE.md](CodeJam/docs/ARCHITECTURE.md) and the design
-record in [mandateflow_docs/MANDATEFLOW.md](mandateflow_docs/MANDATEFLOW.md).
+[CodeJam/docs/ARCHITECTURE.md](CodeJam/docs/ARCHITECTURE.md).
 
 ### Mapped to Track 1's own layered architecture
 
@@ -347,7 +340,7 @@ The submission is organized around the Track 1 judging weights:
 | **40%** | End-to-end middleware behavior | Browser-triggered Codex Run → real Streamable HTTP MCP Gateway → allowed protected operation, pre-execution provenance denial, and safe recovery. |
 | **25%** | Technical design and integration | Explicit Fastify/AgentService/AgentRunner seams, immutable authority contract, exclusive protected path, trust-boundary diagram, and failure semantics. |
 | **20%** | Verification and robustness | Go unit/integration tests for scope, provenance, forged references, ownership, revocation, retry continuity, redaction, non-invocation, and HTTP authentication; TypeScript tests for lifecycle and runtime wiring. |
-| **15%** | Demo and reproducibility | `make demo`, deterministic typed fixtures, documented Docker/Colima/Podman path, three-minute script, automated checks, and honest limitations. |
+| **15%** | Demo and reproducibility | `make demo`, deterministic typed fixtures, documented Docker/Colima/Podman path, three-minute walkthrough, automated checks, and honest limitations. |
 
 Track 1 asks teams to preserve the starter, implement real behavior in a
 backend/Runtime/data/infrastructure path, show a normal and failure/denial or
@@ -429,18 +422,14 @@ state.
 ```text
 CodeJam/                         React UI, Fastify API, Codex runners, launcher
 middleware/mandateflow/          Go sidecar, MCP gateway, policy, SQLite store
-mandateflow_docs/                Design rationale, contracts, and diagrams
 Makefile                         Judge-facing demo, cleanup, and verbose-debug targets
-MIDDLEWARE_TESTING.md            Focused test and live-E2E commands
 ```
 
 Useful reading order:
 
-1. [Three-minute demo](CodeJam/docs/DEMO.md)
-2. [Architecture](CodeJam/docs/ARCHITECTURE.md)
-3. [MandateFlow design](mandateflow_docs/MANDATEFLOW.md)
-4. [Go gateway README](middleware/mandateflow/README.md)
-5. [Local POC details](CodeJam/docs/LOCAL_POC.md)
+1. [Architecture](CodeJam/docs/ARCHITECTURE.md)
+2. [Go gateway README](middleware/mandateflow/README.md)
+3. [Local POC details](CodeJam/docs/LOCAL_POC.md)
 
 ## License
 
