@@ -271,6 +271,29 @@ Read the deeper boundary and lifecycle details in
 [CodeJam/docs/ARCHITECTURE.md](CodeJam/docs/ARCHITECTURE.md) and the design
 record in [mandateflow_docs/MANDATEFLOW.md](mandateflow_docs/MANDATEFLOW.md).
 
+### Mapped to Track 1's own layered architecture
+
+Section 1.7 of the brief illustrates one possible layering for an Agent
+platform and names an **Identity and Policy Plane** as its own layer,
+sitting between the Control Plane and the Agent Runtime. MandateFlow is
+that layer, not a bolt-on to one of the others:
+
+| Track 1 layer | Primary responsibility (brief's wording) | MandateFlow's implementation |
+| --- | --- | --- |
+| Experience Layer | Agent creation, catalog, Playground, middleware evidence, lifecycle actions | React Playground — Mandate Summary, proof console, decision-journal receipt timeline, Retry/Revoke/New-secure-workflow controls. It calls stable platform APIs and never holds the Run capability, the same way the brief's illustrative Experience Layer never holds the Ark key. |
+| Control Plane | Agent specification, validation, status, Run orchestration, reconciliation | The same Fastify + `AgentService` pattern, with new routes added for the policy-context/mandate lifecycle (`prepare` → `activate` → `finish` → `retry` → `revoke`) that call into the Go sidecar; existing Agent/Run routes are untouched. |
+| **Identity and Policy Plane** | Human/Agent identity, delegation, approval, revocation, audit | **This is MandateFlow.** The Go sidecar mints and authenticates capabilities, evaluates static scope and provenance, and revokes mandates — a team-designed boundary around the Runtime's tool operations, exactly as the brief describes this layer. |
+| Agent Runtime Layer | Codex execution, model access, tool routing, retries, cancellation, limits | The `AgentRunner` interface's three methods (`run`/`cancel`/`isAvailable`) are unchanged; `RunnerRequest` gained one new required field, `mandateFlowCapability`, so the disposable Codex Runtime receives exactly one capability and reaches the Gateway over a private MCP network — never a protected-service credential itself. |
+| Execution and Data Layer | Workspace files, persistent state, protected resources, connectors, isolated execution | Per-Agent workspaces (unchanged) plus the five typed protected fixtures (Support, Payments, Cases, CRM, aggregate) and the SQLite store — mandates, grants, capability digests, reference ancestry, receipts, counters — that only the Gateway may open. |
+| Observability Layer | Trace ingestion, correlation, redaction, storage, query, visualization, export | The redacted decision-receipt journal: every protected call, allow or deny, is one causally-linked, queryable event (`GET /runs/:id/evidence`), redacted before it is ever persisted — deliberately narrower than a full trace backend, scoped to exactly the evidence this middleware's claim needs. |
+| Cloud Resource Layer | Compute, networking, storage, scheduling, sandbox infrastructure | Untouched: Docker, Colima, or Podman, same as the starter kit. MandateFlow adds no new infrastructure dependency at this layer. |
+
+The claim is in the middle three rows: a new plane was inserted between the
+Control Plane and the Runtime; the Runtime layer needed exactly one new
+field, not a redesign; and the Cloud Resource Layer — the one furthest from
+the change — is untouched. The Execution and Data Layer gained new protected
+fixtures and a policy store, but nothing it already held was modified.
+
 ## Track 1 rubric alignment
 
 The submission is organized around the Track 1 judging weights:
