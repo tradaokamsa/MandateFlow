@@ -276,23 +276,7 @@ Only the UI needed to operate and explain the middleware was added.
 
 ## Architecture and trust boundary
 
-The architecture diagram near the top shows the integration seams and trust
-boundary. The short version is:
-
-| Component | Owns |
-| --- | --- |
-| React / Codex / Runtime inputs | Untrusted prompts, tool arguments, and opaque references. |
-| Node `JsonStore` | Agent/message metadata plus safe foreign IDs and fingerprints; it never opens the policy database. |
-| Go sidecar + SQLite | Mandates, Run grants, capability digests, ownership-bound fixtures, reference ancestry, receipts, and counters. |
-| Gateway | The only enforcement point for the five protected MCP operations. |
-
-The local launcher gives each instance a private bridge network. In the live
-container profile the MCP port is private to that network; in the fixture
-profile it is published only on loopback so the Node fixture runner can cross
-the same HTTP boundary. The Go control listener is loopback-only. Each live
-Runtime mounts only its selected Agent workspace and private Codex home.
-
-The component ownership table above summarizes the boundary and lifecycle.
+![Architecture and trust boundary](CodeJam/docs/assets/arch-1.jpg)
 
 ## Track 1 rubric alignment
 
